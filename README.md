@@ -5,6 +5,7 @@
 ![version](https://img.shields.io/badge/version-0.3.3-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-5.x-orange)
+[![安装脚本](https://img.shields.io/badge/%E5%AE%89%E8%A3%85%E8%84%9A%E6%9C%AC-Tampermonkey-2f6fed)](https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js)
 ![CI](https://github.com/Marcus-Jiang/115-resource-helper/actions/workflows/ci.yml/badge.svg)
 
 ![发送面板](docs/images/panel.png)
