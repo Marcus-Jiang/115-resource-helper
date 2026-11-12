@@ -2,7 +2,7 @@
 
 > 选中或复制磁力链接，一键推送到 115 云下载；低频轮询任务，下载完成后整理文件夹名、文件名和垃圾文件。
 
-![version](https://img.shields.io/badge/version-0.3.5-blue)
+![version](https://img.shields.io/badge/version-0.3.6-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-5.x-orange)
 [![安装脚本](https://img.shields.io/badge/%E5%AE%89%E8%A3%85%E8%84%9A%E6%9C%AC-Tampermonkey-2f6fed)](https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js)
@@ -70,6 +70,7 @@
 - 推送后 **18 秒内** 在 **1.5s / 3s / 5s / 8s / 12s / 18s** 快速检查；这段时间内没完成，就退到 **10 分钟**（可设置）的慢速轮询；超过 2 小时改为 15 分钟。
 - 只在页面可见、且当前标签是“主标签”时检查；多个标签之间会同步任务状态。
 - 也可以点「立即检查」；状态异常时可点任务卡上的「按目录检查」强制判断完成。
+- 如果任务卡在「检查中」，点任务卡上的「重新检查」；0.3.6 起超过 90 秒会自动回收为「等待下载」并重试。
 - 任务页顶部有 **未完成 / 已完成 / 全部** 筛选，默认只显示未完成；「已完成」里是已整理/已忽略的任务，可一键清空记录。
 - 完成后插件会：
   - 列出目标目录，和推送前快照做差异，定位本次新增的文件夹/文件；

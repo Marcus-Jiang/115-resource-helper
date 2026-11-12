@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.3.5
+// @version      0.3.6
 // @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
@@ -31,7 +31,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.3.5';
+  const VERSION = '0.3.6';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',
@@ -2052,7 +2052,14 @@
       if (t.error) card.appendChild(h('div', { class: 'taskmeta warn', text: t.error }));
       const actions = [];
       if (t.status === 'pending' || t.status === 'checking') {
-        actions.push(h('button', { class: 'btn', type: 'button', text: '立即检查', onclick: async () => { await this.checkAll(); } }));
+        if (t.status === 'checking') {
+          actions.push(h('button', { class: 'btn', type: 'button', text: '重新检查', onclick: () => {
+            Queue.update(t.id, { status: 'pending', checkingAt: 0, error: '' });
+            this.checkAll();
+          } }));
+        } else {
+          actions.push(h('button', { class: 'btn', type: 'button', text: '立即检查', onclick: async () => { await this.checkAll(); } }));
+        }
         actions.push(h('button', { class: 'btn', type: 'button', text: '按目录检查', onclick: () => this.forceCheckDiff(t.id) }));
         actions.push(h('button', { class: 'btn', type: 'button', text: '取消跟踪', onclick: () => { Queue.remove(t.id); this.refreshTasks(); } }));
       } else if (t.status === 'ready') {
@@ -2088,8 +2095,13 @@
 
     async checkAll() {
       if (Queue.polling) {
-        this.toast('正在检查，请稍候…', 'info', { timeout: 2500 });
-        return;
+        if (!Queue.pollStartedAt || now() - Queue.pollStartedAt < 10 * 1000) {
+          this.toast('正在检查，请稍候…', 'info', { timeout: 2500 });
+          return;
+        }
+        // 检查卡住超过 10 秒：手动复位并回收“检查中”任务
+        Queue.polling = false;
+        Queue.recoverStaleChecks(true);
       }
       try {
         await Queue.poll(true);
@@ -3061,6 +3073,7 @@
   const Queue = {
     timer: null,
     polling: false,
+    pollStartedAt: 0,
     lastPollAt: 0,
     _earlyTimer: 0,
     _earlyActive: false,
@@ -3119,6 +3132,25 @@
       }
     },
 
+    recoverStaleChecks(force) {
+      const list = this.list();
+      const nowTs = now();
+      let changed = false;
+      for (const t of list) {
+        if (t.status !== 'checking') continue;
+        const at = Number(t.checkingAt) || 0;
+        const stale = force
+          ? (!at || nowTs - at > 10 * 1000)
+          : (!at || nowTs - at > 90 * 1000);
+        if (!stale) continue;
+        t.status = 'pending';
+        t.checkingAt = 0;
+        if (!t.error) t.error = '上次检查中断，已重新排队';
+        changed = true;
+      }
+      if (changed) this.save(list);
+    },
+
     scheduleEarly() {
       // 推送后 18 秒内快速检查；没完成就回到 10 分钟慢速轮询
       if (this._earlyActive) return;
@@ -3143,6 +3175,7 @@
 
     async poll(manual, early) {
       if (this.polling) return;
+      this.recoverStaleChecks(!!manual);
       const pending = this.list().filter((x) => x.status === 'pending');
       if (!pending.length) return;
       if (!manual) {
@@ -3157,6 +3190,7 @@
         if (!early && now() - this.lastPollAt < interval) return;
       }
       this.polling = true;
+      this.pollStartedAt = now();
       this.lastPollAt = now();
       try {
         let remote = [];
@@ -3260,7 +3294,7 @@
     async finalize(id, remote, precomputed) {
       const task = this.get(id);
       if (!task) return;
-      this.update(id, { status: 'checking' });
+      this.update(id, { status: 'checking', checkingAt: now() });
       try {
         let result = precomputed || await this.detectByDiff(task);
         if (!result && remote && remote.fileId) {
@@ -3308,9 +3342,16 @@
           setTimeout(() => { UI.applyPlan(id).catch((e) => log('auto apply failed', e)); }, 50);
         }
       } catch (e) {
-        if (e instanceof RiskError) { this.update(id, { status: 'pending' }); return; }
-        this.update(id, { status: 'ready', error: e.message });
+        if (e instanceof RiskError) { this.update(id, { status: 'pending', checkingAt: 0 }); return; }
+        this.update(id, { status: 'ready', error: e.message, checkingAt: 0 });
         UI.toast('整理计划生成失败：' + e.message, 'error');
+      } finally {
+        try {
+          const cur = this.get(id);
+          if (cur && cur.status === 'checking') {
+            this.update(id, { status: 'pending', checkingAt: 0, error: '检查中断，已重新排队' });
+          }
+        } catch (_) {}
       }
     },
 
@@ -3358,7 +3399,16 @@
           if (remote && UI.ready) UI.refreshTasks();
         });
       } catch (_) {}
-      this.timer = setInterval(() => { this.poll(false).catch((e) => log('poll error', e)); }, 60 * 1000);
+      this.timer = setInterval(() => {
+        let early = false;
+        if (this.polling && now() - (this.pollStartedAt || 0) > 120 * 1000) {
+          log('poll watchdog: resetting stuck poll');
+          this.polling = false;
+          this.recoverStaleChecks(false);
+          early = true;
+        }
+        this.poll(false, early).catch((e) => log('poll error', e));
+      }, 60 * 1000);
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') this.poll(false, true).catch(() => {});
       });

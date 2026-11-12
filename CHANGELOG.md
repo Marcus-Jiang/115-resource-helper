@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.3.6] - 2026-11-12
+
+### Fixed
+
+- Tasks stuck in "检查中" after a tab reload/close, a hung request, or a risk cooldown are now recovered automatically: stale checks are reset to `pending` after 90 seconds, and a manual re-check can reset them after 10 seconds.
+- Added a "重新检查" action for checking tasks.
+- Added a polling watchdog that resets a stuck poll after 120 seconds so the queue can continue.
+
 ## [0.3.5] - 2026-11-12
 
 ### Fixed
