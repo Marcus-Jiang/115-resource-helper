@@ -22,7 +22,7 @@ Default repo name: `115-resource-helper`. The script updates:
 git init -b main
 git add -A
 git status
-git commit -m "chore: initial public release v0.3.4"
+git commit -m "chore: initial public release v0.3.5"
 ```
 
 `reference/` is intentionally ignored: it contains third-party research scripts and must not be redistributed.
@@ -47,8 +47,8 @@ git push -u origin main
 ## 4. Release
 
 ```bash
-git tag -a v0.3.4 -m "v0.3.4"
-git push origin v0.3.4
+git tag -a v0.3.5 -m "v0.3.5"
+git push origin v0.3.5
 ```
 
 Create a GitHub Release from the tag, using the `CHANGELOG.md` section. Suggested assets:

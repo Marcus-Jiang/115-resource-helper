@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.3.4
+// @version      0.3.5
 // @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
@@ -31,7 +31,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.3.4';
+  const VERSION = '0.3.5';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',
@@ -3063,6 +3063,7 @@
     polling: false,
     lastPollAt: 0,
     _earlyTimer: 0,
+    _earlyActive: false,
     tabId: Math.random().toString(36).slice(2, 10),
 
     list() { return Store.get('tasks', []) || []; },
@@ -3120,16 +3121,21 @@
 
     scheduleEarly() {
       // 推送后 18 秒内快速检查；没完成就回到 10 分钟慢速轮询
-      if (this._earlyTimer) return;
+      if (this._earlyActive) return;
+      this._earlyActive = true;
       try { Store.set('pollLock', { id: this.tabId, until: now() + 2 * 60 * 1000 }); } catch (_) {}
-      const delays = [1.5, 3, 5, 8, 12, 18].map((s) => s * 1000);
+      const start = now();
+      const delays = [1500, 3000, 5000, 8000, 12000, 18000]; // 从推送时刻起算的绝对时间
       let i = 0;
-      const tick = () => {
+      const tick = async () => {
         this._earlyTimer = 0;
-        this.poll(false, true).catch(() => {});
+        try { await this.poll(false, true); } catch (_) {}
         i += 1;
         if (i < delays.length && this.list().some((t) => t.status === 'pending')) {
-          this._earlyTimer = setTimeout(tick, delays[i]);
+          const wait = Math.max(0, start + delays[i] - now());
+          this._earlyTimer = setTimeout(tick, wait);
+        } else {
+          this._earlyActive = false;
         }
       };
       this._earlyTimer = setTimeout(tick, delays[0]);

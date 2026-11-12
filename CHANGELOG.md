@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.3.5] - 2026-11-12
+
+### Fixed
+
+- Post-push fast checks now use absolute deadlines from the push (1.5/3/5/8/12/18 seconds) instead of accumulating delays, so instant tasks are detected within the intended 15-second window.
+
 ## [0.3.4] - 2026-11-12
 
 ### Changed

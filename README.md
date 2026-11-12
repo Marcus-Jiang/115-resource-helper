@@ -2,7 +2,7 @@
 
 > 选中或复制磁力链接，一键推送到 115 云下载；低频轮询任务，下载完成后整理文件夹名、文件名和垃圾文件。
 
-![version](https://img.shields.io/badge/version-0.3.4-blue)
+![version](https://img.shields.io/badge/version-0.3.5-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-5.x-orange)
 [![安装脚本](https://img.shields.io/badge/%E5%AE%89%E8%A3%85%E8%84%9A%E6%9C%AC-Tampermonkey-2f6fed)](https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js)
