@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>115 资源助手 UI 测试</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #f1f5f9; font-family: "Microsoft YaHei", sans-serif; }
+  body { padding: 24px; }
+  h1 { font-size: 18px; color: #0f172a; }
+  p { color: #475569; font-size: 13px; }
+  .fake-page { max-width: 720px; }
+  .fake-page a { color: #2563eb; }
+</style>
+</head>
+<body>
+<div class="fake-page">
+  <h1>一个普通的资源页面</h1>
+  <p>下面是测试用的磁力链接：</p>
+  <p><a href="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567">magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567</a></p>
+  <p>脚本会在右下角创建一个悬浮球；测试页会自动打开面板。本页只模拟 115 接口，不会发出真实请求。</p>
+</div>
+
+<script>
+  // ---- GM API 模拟（仅用于 UI 测试）----
+  const fakeStore = {
+    'rh115.firstRun': false,
+    'rh115.defaultPath': '/电影',
+    'rh115.defaultCid': '111',
+    'rh115.mode': 'standard',
+    'rh115.pushGapMs': 10000,
+    'rh115.pushPerHour': 20,
+    'rh115.budgetPerHour': 300,
+    'rh115.trimMagnet': true,
+    'rh115.copyToast': true,
+    'rh115.favoritePaths': [
+      { path: '/电影', cid: '111', name: '电影' },
+      { path: '/剧集', cid: '222', name: '剧集' },
+      { path: '/云下载', cid: '333', name: '云下载' },
+    ],
+  };
+  window.GM_getValue = (k, d) => Object.prototype.hasOwnProperty.call(fakeStore, k) ? fakeStore[k] : d;
+  window.GM_setValue = (k, v) => { fakeStore[k] = v; };
+  window.GM_deleteValue = (k) => { delete fakeStore[k]; };
+  window.GM_registerMenuCommand = () => {};
+  window.GM_addValueChangeListener = () => {};
+  window.GM_xmlhttpRequest = (opts) => {
+    setTimeout(() => {
+      const url = String(opts.url || '');
+      let body = { state: true };
+      if (url.includes('natsort/files.php') || url.includes('webapi.115.com/files?')) {
+        body = {
+          state: true,
+          count: 4,
+          data: [
+            { cid: '111', n: '电影' },
+            { cid: '222', n: '剧集' },
+            { cid: '333', n: '云下载' },
+            { cid: '444', n: '动画' },
+          ],
+        };
+      } else if (url.includes('ct=offline&ac=space')) {
+        body = { state: true, sign: 'fake-sign', time: '1234567890' };
+      } else if (url.includes('add_task_url')) {
+        body = { state: true };
+      }
+      if (opts.onload) {
+        opts.onload({ status: 200, responseText: JSON.stringify(body), responseHeaders: '' });
+      }
+    }, 40);
+  };
+</script>
+
+<script src="../115-resource-helper.user.js"></script>
+
+<script>
+  function demoPlan(api) {
+    const root = {
+      id: '100',
+      name: '【示例站发布 www.example.com】示例电影[简繁英字幕].Example.Movie.2026.2160p.NF.Web-DL.DDP.5.1.Atmos.H.265-DreamHD',
+      children: [
+        { id: '1', isFolder: false, name: '【更多无水印高品质资源请访问 www.example.com】【更多无水印高品质资源请访问 www.example.com】.MP4', size: 300 * 1024, parentId: '100', children: [] },
+        { id: '2', isFolder: false, name: '【更多无水印高品质资源请访问 www.example.com】【更多无水印高品质资源请访问 www.example.com】.MKV', size: 400 * 1024, parentId: '100', children: [] },
+        { id: '3', isFolder: false, name: '【更多无水印高品质资源请访问 www.example.com】【更多无水印高品质资源请访问 www.example.com】.DOC', size: 200 * 1024, parentId: '100', children: [] },
+        { id: '4', isFolder: false, name: 'Example.Movie.2026.2160p.NF.Web-DL.DDP.5.1.Atmos.H.265-DreamHD.mkv', size: 21 * 1024 * 1024 * 1024, parentId: '100', children: [] },
+      ],
+    };
+    return api.Organizer.planTree(root, { rootName: root.name, minVideoMB: 100, keepRatio: 1 });
+  }
+
+  const view = new URLSearchParams(location.search).get('view') || 'panel';
+  setTimeout(() => {
+    const api = window.__RH115__;
+    if (!api) {
+      document.body.insertAdjacentHTML('beforeend', '<pre>没有拿到 __RH115__</pre>');
+      return;
+    }
+    if (view === 'pill') {
+      const a = document.querySelector('.fake-page a');
+      const range = document.createRange();
+      range.selectNodeContents(a);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      setTimeout(() => api.UI.onSelection(), 150);
+      return;
+    }
+    if (view === 'tasks' || view === 'done' || view === 'preview') {
+      const plan = demoPlan(api);
+      if (view === 'preview') {
+        api.UI.openPreviewFor({ id: 'manual-demo', name: 'Example.Movie' }, plan);
+      } else {
+        const readyTask = {
+          id: 't-demo',
+          name: '【示例站发布 www.example.com】示例电影[简繁英字幕].Example.Movie.2026.2160p.NF.Web-DL.DDP.5.1.Atmos.H.265-DreamHD',
+          targetPath: '/电影',
+          addedAt: Date.now() - 3600 * 1000,
+          status: 'ready',
+          infoHash: '0123456789abcdef0123456789abcdef01234567',
+          plan,
+        };
+        const doneTask = {
+          id: 't-done',
+          name: 'Finished.Show.S01E01.1080p',
+          targetPath: '/剧集',
+          addedAt: Date.now() - 86400 * 1000,
+          status: 'organized',
+          summary: '删除 3 · 改名 1',
+          infoHash: '01bbf49fceb27c7e5875c11754eeec902734dc66',
+        };
+        fakeStore['rh115.tasks'] = view === 'done' ? [doneTask, readyTask] : [readyTask];
+        api.UI.openPanel();
+        api.UI.showTab('tasks');
+        if (view === 'done') api.UI.setTaskFilter('done');
+        api.UI.refreshTasks();
+      }
+      return;
+    }
+    api.UI.openPanel('magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Example.Movie.2026.2160p');
+    if (view === 'send') api.UI.send();
+    else if (view === 'picker') setTimeout(() => api.UI.openPicker(), 150);
+    else if (view === 'settings') {
+      api.UI.showTab('settings');
+      setTimeout(() => { try { api.UI.els.cfgResMode.scrollIntoView({ block: 'center' }); } catch (_) {} }, 300);
+    }
+  }, 120);
+</script>
+</body>
+</html>

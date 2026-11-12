@@ -1,0 +1,31 @@
+{
+  "name": "115-resource-helper",
+  "version": "0.3.3",
+  "private": true,
+  "description": "Tampermonkey userscript: magnet/ed2k links to 115 cloud download, with low-risk request scheduling and a file organizer.",
+  "keywords": [
+    "tampermonkey",
+    "userscript",
+    "115",
+    "cloud-download",
+    "magnet",
+    "ed2k"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Marcus-Jiang/115-resource-helper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Marcus-Jiang/115-resource-helper/issues"
+  },
+  "homepage": "https://github.com/Marcus-Jiang/115-resource-helper#readme",
+  "scripts": {
+    "check": "node --check 115-resource-helper.user.js",
+    "test": "node test/core.test.js",
+    "verify": "npm run check && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

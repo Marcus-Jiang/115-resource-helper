@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>115 资源助手 · UI 演示</title>
+<style>
+  :root {
+    --bg: #eef2f7;
+    --card: #ffffff;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --line: #dbe3ee;
+    --brand: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  }
+  header {
+    height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 28px;
+    background: #fff; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px;
+  }
+  header strong { color: var(--ink); font-size: 15px; }
+  main { max-width: 980px; margin: 32px auto; padding: 0 24px; }
+  .card {
+    display: flex; gap: 26px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 24px; box-shadow: 0 12px 30px rgba(15, 23, 42, .06);
+  }
+  .poster {
+    width: 190px; height: 270px; flex: none; border-radius: 12px;
+    background:
+      radial-gradient(circle at 30% 20%, rgba(255,255,255,.55), transparent 38%),
+      linear-gradient(150deg, #1d4ed8, #0f172a 72%);
+    position: relative; overflow: hidden;
+  }
+  .poster::after {
+    content: "4K"; position: absolute; right: 12px; bottom: 12px;
+    color: #fff; font-weight: 700; letter-spacing: .12em; opacity: .85;
+  }
+  .info { flex: 1; min-width: 0; }
+  h1 { margin: 2px 0 8px; font-size: 26px; line-height: 1.3; }
+  .meta { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .intro { color: #334155; font-size: 14px; line-height: 1.8; margin: 0 0 20px; }
+  .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .magnet {
+    display: block; padding: 12px 14px; border-radius: 10px; border: 1px dashed var(--line);
+    background: #f8fafc; color: var(--brand); font-family: Consolas, monospace; font-size: 12px;
+    word-break: break-all; line-height: 1.6;
+  }
+  footer { max-width: 980px; margin: 24px auto 40px; padding: 0 24px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>资源站</strong>
+  <span>演示页 · 使用模拟数据，不会请求真实 115</span>
+</header>
+<main>
+  <section class="card">
+    <div class="poster"></div>
+    <div class="info">
+      <h1>示例电影 Example Movie (2026)</h1>
+      <p class="meta">2026 · 2160p · WEB-DL · DDP 5.1 Atmos · H.265 · 简繁英字幕</p>
+      <p class="intro">
+        这是一条用于展示「115 资源助手」的示例资源。选中下面的磁力链接或直接复制，
+        插件会在右上角提示「发送到 115」，随后进入任务队列；下载完成后可以预览并整理文件名。
+      </p>
+      <div class="label">磁力链接</div>
+      <a class="magnet" href="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567">magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&amp;dn=Example.Movie.2026.2160p</a>
+    </div>
+  </section>
+</main>
+<footer>115 资源助手 · UI demo · 数据为虚构，仅用于截图</footer>
+
+<script>
+  // ---- GM API stubs (demo only; no real requests) ----
+  const fakeStore = {
+    'rh115.firstRun': false,
+    'rh115.defaultPath': '/电影',
+    'rh115.defaultCid': '111',
+    'rh115.mode': 'standard',
+    'rh115.pushGapMs': 10000,
+    'rh115.pushPerHour': 20,
+    'rh115.budgetPerHour': 300,
+    'rh115.trimMagnet': true,
+    'rh115.copyToast': true,
+    'rh115.favoritePaths': [
+      { path: '/电影', cid: '111', name: '电影' },
+      { path: '/剧集', cid: '222', name: '剧集' },
+      { path: '/云下载', cid: '333', name: '云下载' },
+    ],
+  };
+  window.GM_getValue = (k, d) => Object.prototype.hasOwnProperty.call(fakeStore, k) ? fakeStore[k] : d;
+  window.GM_setValue = (k, v) => { fakeStore[k] = v; };
+  window.GM_deleteValue = (k) => { delete fakeStore[k]; };
+  window.GM_registerMenuCommand = () => {};
+  window.GM_addValueChangeListener = () => {};
+  window.GM_xmlhttpRequest = (opts) => {
+    setTimeout(() => {
+      const url = String(opts.url || '');
+      let body = { state: true };
+      if (url.includes('natsort/files.php') || url.includes('webapi.115.com/files?')) {
+        body = {
+          state: true,
+          count: 4,
+          data: [
+            { cid: '111', n: '电影' },
+            { cid: '222', n: '剧集' },
+            { cid: '333', n: '云下载' },
+            { cid: '444', n: '动画' },
+          ],
+        };
+      } else if (url.includes('ct=offline&ac=space')) {
+        body = { state: true, sign: 'demo-sign', time: '1234567890' };
+      } else if (url.includes('add_task_url')) {
+        body = { state: true };
+      }
+      if (opts.onload) opts.onload({ status: 200, responseText: JSON.stringify(body), responseHeaders: '' });
+    }, 40);
+  };
+</script>
+
+<script src="../115-resource-helper.user.js"></script>
+
+<script>
+  function demoPlan(api) {
+    const root = {
+      id: '100',
+      name: '【示例站发布 www.example.com】示例电影[简繁英字幕].Example.Movie.2026.2160p.NF.Web-DL.DDP.5.1.Atmos.H.265-DreamHD',
+      children: [
+        { id: '1', isFolder: false, name: '【更多无水印高品质资源请访问 www.example.com】【更多无水印高品质资源请访问 www.example.com】.MP4', size: 300 * 1024, parentId: '100', children: [] },
+        { id: '2', isFolder: false, name: '【更多无水印高品质资源请访问 www.example.com】【更多无水印高品质资源请访问 www.example.com】.MKV', size: 400 * 1024, parentId: '100', children: [] },
+        { id: '3', isFolder: false, name: '【更多无水印高品质资源请访问 www.example.com】【更多无水印高品质资源请访问 www.example.com】.DOC', size: 200 * 1024, parentId: '100', children: [] },
+        { id: '4', isFolder: false, name: 'Example.Movie.2026.2160p.NF.Web-DL.DDP.5.1.Atmos.H.265-DreamHD.mkv', size: 21 * 1024 * 1024 * 1024, parentId: '100', children: [] },
+      ],
+    };
+    return api.Organizer.planTree(root, { rootName: root.name, minVideoMB: 100, keepRatio: 1 });
+  }
+
+  const view = new URLSearchParams(location.search).get('view') || 'panel';
+  setTimeout(() => {
+    const api = window.__RH115__;
+    if (!api) return;
+    if (view === 'tasks') {
+      fakeStore['rh115.tasks'] = [{
+        id: 't-demo',
+        name: '【示例站发布 www.example.com】示例电影[简繁英字幕].Example.Movie.2026.2160p.NF.Web-DL.DDP.5.1.Atmos.H.265-DreamHD',
+        targetPath: '/电影',
+        addedAt: Date.now() - 3600 * 1000,
+        status: 'ready',
+        infoHash: '0123456789abcdef0123456789abcdef01234567',
+        plan: demoPlan(api),
+      }];
+      api.UI.openPanel();
+      api.UI.showTab('tasks');
+      api.UI.refreshTasks();
+      return;
+    }
+    if (view === 'preview') {
+      api.UI.openPreviewFor({ id: 'manual-demo', name: 'Example.Movie' }, demoPlan(api));
+      return;
+    }
+    api.UI.openPanel('magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Example.Movie.2026.2160p');
+  }, 150);
+</script>
+</body>
+</html>

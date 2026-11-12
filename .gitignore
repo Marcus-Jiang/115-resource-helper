@@ -1,0 +1,20 @@
+# Local research material (third-party scripts used for API research only)
+reference/
+
+# Test artifacts
+test/.tmp-*
+test/.edge-*
+test/*.png
+*.log
+
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
