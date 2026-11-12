@@ -1,6 +1,6 @@
 {
   "name": "115-resource-helper",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "Tampermonkey userscript: magnet/ed2k links to 115 cloud download, with low-risk request scheduling and a file organizer.",
   "keywords": [

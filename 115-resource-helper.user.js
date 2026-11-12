@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.3.3
+// @version      0.3.4
 // @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
@@ -31,7 +31,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.3.3';
+  const VERSION = '0.3.4';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',
@@ -171,7 +171,7 @@
     budget: { k: '', n: 0 },
     pushLog: [],
     tasks: [],
-    pollMinutes: 2,
+    pollMinutes: 10,
     autoOrganize: false,
     minVideoMB: 100,
     keepRatio: 1,
@@ -1278,6 +1278,11 @@
 
       this.initBall();
       this.ready = true;
+      if (Store.get('pollMigrated034', false) !== true) {
+        const pm = Number(Store.get('pollMinutes', 10));
+        if (!pm || pm === 2) Store.set('pollMinutes', 10);
+        Store.set('pollMigrated034', true);
+      }
       this.ensureDirUsage();
       this.renderPath();
       this.renderFavorites();
@@ -1424,7 +1429,7 @@
         h('label', { class: 'checkrow' }, keepSubs, h('span', { text: '强制保留字幕（推荐）' })),
         h('label', { class: 'checkrow' }, keepImages, h('span', { text: '保留图片（海报/封面等）' })),
         h('label', { class: 'checkrow' }, keepNfo, h('span', { text: '保留 NFO 文件' })),
-        this.field('轮询间隔（分钟）', pollMin, '有未完成任务时，多久检查一次。'),
+        this.field('轮询间隔（分钟）', pollMin, '推送后前 18 秒会快速检查；之后按这个间隔慢速检查。'),
         h('div', { class: 'btnrow' },
           h('button', { class: 'btn primary', type: 'button', text: '保存设置', onclick: () => this.saveSettings() }),
           h('button', { class: 'btn', type: 'button', text: '检查登录', onclick: () => this.checkLogin() }),
@@ -1787,7 +1792,7 @@
       this.els.cfgKeepExtras.checked = Store.get('keepExtras', true) !== false;
       const rm = String(Store.get('resourceMode', 'movie'));
       this.els.cfgResMode.value = ['movie', 'series', 'music', 'software', 'generic'].includes(rm) ? rm : 'movie';
-      this.els.cfgPoll.value = Number(Store.get('pollMinutes', 2)) || 2;
+      this.els.cfgPoll.value = Number(Store.get('pollMinutes', 10)) || 10;
       this.renderPath();
     },
 
@@ -1813,7 +1818,7 @@
       Store.set('keepExtras', !!this.els.cfgKeepExtras.checked);
       const rm = this.els.cfgResMode.value;
       Store.set('resourceMode', ['movie', 'series', 'music', 'software', 'generic'].includes(rm) ? rm : 'movie');
-      Store.set('pollMinutes', clamp(Number(this.els.cfgPoll.value) || 2, 1, 120));
+      Store.set('pollMinutes', clamp(Number(this.els.cfgPoll.value) || 10, 1, 120));
       this.renderBudget();
       this.toast('设置已保存', 'success');
     },
@@ -1954,6 +1959,8 @@
         this.els.sendBtn.textContent = '发送到 115';
         this.renderBudget();
         this.refreshRisk();
+        // 整批推送结束后再启动快速检查，避免和后续推送抢请求队列
+        if (ok > 0) Queue.scheduleEarly();
       }
     },
 
@@ -3065,7 +3072,6 @@
       const list = this.list();
       list.push(task);
       this.save(list);
-      this.scheduleEarly();
     },
     update(id, patch) {
       const list = this.list();
@@ -3113,9 +3119,10 @@
     },
 
     scheduleEarly() {
-      // 推送后前 3 分钟加密检查：30s / 90s / 180s；之后回到正常轮询间隔
+      // 推送后 18 秒内快速检查；没完成就回到 10 分钟慢速轮询
       if (this._earlyTimer) return;
-      const delays = [30, 90, 180].map((s) => s * 1000);
+      try { Store.set('pollLock', { id: this.tabId, until: now() + 2 * 60 * 1000 }); } catch (_) {}
+      const delays = [1.5, 3, 5, 8, 12, 18].map((s) => s * 1000);
       let i = 0;
       const tick = () => {
         this._earlyTimer = 0;
@@ -3137,7 +3144,7 @@
         if (mode === 'manual' || mode === 'low') return;
         if (document.hidden) return;
         if (!this.isLeader()) return;
-        let interval = Math.max(1, Number(Store.get('pollMinutes', 2)) || 2) * 60 * 1000;
+        let interval = Math.max(1, Number(Store.get('pollMinutes', 10)) || 10) * 60 * 1000;
         const oldest = Math.min.apply(null, pending.map((t) => Number(t.addedAt) || now()));
         if (now() - oldest > 30 * 60 * 1000) interval = Math.max(interval, 5 * 60 * 1000);
         if (now() - oldest > 2 * 3600 * 1000) interval = Math.max(interval, 15 * 60 * 1000);
@@ -3281,11 +3288,18 @@
         }
         const finalName = (result.kind === 'folder' ? result.rootName : (remote && remote.name)) || task.name || '';
         this.update(id, { status: 'ready', result, plan, name: finalName, finishedAt: now(), error: '' });
-        UI.toast(`任务完成：保留 ${plan.stats.keep} 个，待删 ${plan.stats.junk} 个`, 'success', {
-          action: '预览', timeout: 12000, onAction: () => UI.openPreview(id),
-        });
-        if (Store.get('autoOrganize', false) && plan.safe) {
-          setTimeout(() => { UI.applyPlan(id).catch((e) => log('auto apply failed', e)); }, 600);
+        const auto = Store.get('autoOrganize', false) && plan.safe;
+        UI.toast(
+          auto
+            ? `任务完成，正在自动整理（保留 ${plan.stats.keep} / 待删 ${plan.stats.junk}）`
+            : `任务完成：保留 ${plan.stats.keep} 个，待删 ${plan.stats.junk} 个`,
+          'success',
+          auto
+            ? { timeout: 5000 }
+            : { action: '预览', timeout: 12000, onAction: () => UI.openPreview(id) }
+        );
+        if (auto) {
+          setTimeout(() => { UI.applyPlan(id).catch((e) => log('auto apply failed', e)); }, 50);
         }
       } catch (e) {
         if (e instanceof RiskError) { this.update(id, { status: 'pending' }); return; }
@@ -3307,7 +3321,7 @@
 
     async waitStable(cid) {
       let last = '';
-      for (let i = 0; i < 3; i += 1) {
+      for (let i = 0; i < 2; i += 1) {
         try {
           const items = await Pan115.listFolderFresh(cid);
           const sig = items.length + ':' + items.reduce((s, x) => s + (Number(x.size) || 0), 0);
@@ -3316,7 +3330,7 @@
         } catch (e) {
           if (e instanceof RiskError) throw e;
         }
-        if (i < 2) await sleep(1500);
+        if (i < 1) await sleep(1000);
       }
       return false;
     },
@@ -3340,7 +3354,7 @@
       } catch (_) {}
       this.timer = setInterval(() => { this.poll(false).catch((e) => log('poll error', e)); }, 60 * 1000);
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') this.poll(false).catch(() => {});
+        if (document.visibilityState === 'visible') this.poll(false, true).catch(() => {});
       });
       window.addEventListener('beforeunload', () => {
         const lock = Store.get('pollLock', null);

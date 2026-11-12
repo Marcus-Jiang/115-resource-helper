@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the internal structure of `115-resource-helper.user.js` (v0.3.3). It is a single-file Tampermonkey userscript with no build step and no runtime dependencies.
+This document describes the internal structure of `115-resource-helper.user.js` (v0.3.4). It is a single-file Tampermonkey userscript with no build step and no runtime dependencies.
 
 ## Data flow
 
@@ -16,7 +16,7 @@ Link.extract  ──►  UI.send
         └─ Queue.add(task)                   (GM storage + early checks)
                     │
                     ▼
-        Queue.poll (leader tab, 30/90/180s then 2 min)
+        Queue.poll (leader tab, 1.5/3/5/8/12/18s then 10 min)
                     │
                     ├─ Pan115.listTasks(page 1..3)
                     ├─ match by info hash / name
@@ -76,6 +76,7 @@ Link.extract  ──►  UI.send
 - All 115 calls go through `Scheduler`, which enforces one in-flight request and a minimum gap (1.2s ± jitter in standard mode, 2.5s in low mode, 3s in manual mode).
 - `Budget` limits the total to 300 requests/hour (configurable).
 - Push spacing is 10 seconds and 20 pushes/hour by default.
+- After a push, the tab that pushed takes the polling lock and checks at 1.5/3/5/8/12/18 seconds; if the task is not done by then, polling drops to every 10 minutes.
 - `911` blocks the scheduler and opens a modal; the user verifies on 115, then `Risk.probe()` checks the sign endpoint. A 10-minute cooldown follows.
 - `590075` pauses for 60 seconds.
 - A leader tab owns `pollLock`; other tabs sync tasks through `GM_addValueChangeListener`.

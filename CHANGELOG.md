@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.3.4] - 2026-11-12
+
+### Changed
+
+- Post-push fast path: check at 1.5/3/5/8/12/18 seconds and run auto-organize immediately, aiming to finish simple instant tasks in about 10-15 seconds.
+- If the task is not done during the 18-second burst, polling drops to every 10 minutes (configurable) instead of every 2 minutes.
+- Faster organizer settling: 2 checks with a 1-second gap instead of 3 × 1.5 seconds; auto-apply delay reduced to 50 ms.
+- Auto-organize toast now says "正在自动整理" instead of offering a preview action.
+
 ## [0.3.3] - 2026-11-12
 
 ### Added
