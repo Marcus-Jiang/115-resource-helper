@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.3.7] - 2026-11-12
+
+### Changed
+
+- Install/update URLs now use `ghproxy.net` (5-minute cache) instead of `raw.githubusercontent.com`, which is reset or blocked on some networks. `jsDelivr` is documented as a fallback.
+- One-time reinstall/paste is required because older installed copies either have no `@updateURL` (manual paste) or still point to the blocked raw URL.
+
 ## [0.3.6] - 2026-11-12
 
 ### Fixed

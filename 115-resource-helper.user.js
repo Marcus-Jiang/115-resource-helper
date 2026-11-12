@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.3.6
+// @version      0.3.7
 // @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
 // @homepageURL  https://github.com/Marcus-Jiang/115-resource-helper
 // @supportURL   https://github.com/Marcus-Jiang/115-resource-helper/issues
-// @updateURL    https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js
-// @downloadURL  https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js
+// @updateURL    https://ghproxy.net/https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js
+// @downloadURL  https://ghproxy.net/https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -31,7 +31,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.3.6';
+  const VERSION = '0.3.7';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',

@@ -2,10 +2,10 @@
 
 > 选中或复制磁力链接，一键推送到 115 云下载；低频轮询任务，下载完成后整理文件夹名、文件名和垃圾文件。
 
-![version](https://img.shields.io/badge/version-0.3.6-blue)
+![version](https://img.shields.io/badge/version-0.3.7-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-5.x-orange)
-[![安装脚本](https://img.shields.io/badge/%E5%AE%89%E8%A3%85%E8%84%9A%E6%9C%AC-Tampermonkey-2f6fed)](https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js)
+[![安装脚本](https://img.shields.io/badge/%E5%AE%89%E8%A3%85%E8%84%9A%E6%9C%AC-Tampermonkey-2f6fed)](https://ghproxy.net/https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js)
 ![CI](https://github.com/Marcus-Jiang/115-resource-helper/actions/workflows/ci.yml/badge.svg)
 
 ![发送面板](docs/images/panel.png)
@@ -23,13 +23,19 @@
 
 ## 安装
 
-### 方式一：从 GitHub Raw 安装（推荐）
+### 方式一：从 CDN 安装（推荐）
 
 1. 安装 [Tampermonkey（篡改猴）](https://www.tampermonkey.net/)。
 2. 打开：
 
    ```
-   https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js
+   https://ghproxy.net/https://ghproxy.net/https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js
+   ```
+
+   如果 ghproxy 不可用，改用 jsDelivr：
+
+   ```
+   https://cdn.jsdelivr.net/gh/Marcus-Jiang/115-resource-helper@main/115-resource-helper.user.js
    ```
 
 3. Tampermonkey 会弹出安装页，点「安装」。
