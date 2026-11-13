@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read userscript version
+        id: version
+        run: |
+          VERSION=$(grep -m1 '@version' 115-resource-helper.user.js | awk '{print $3}')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog section
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found=1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            printf 'See CHANGELOG.md for details.\n' > release-notes.md
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          files: 115-resource-helper.user.js
+          generate_release_notes: false

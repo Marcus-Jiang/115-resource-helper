@@ -2,7 +2,7 @@
 
 > 选中或复制磁力链接，一键推送到 115 云下载；低频轮询任务，下载完成后整理文件夹名、文件名和垃圾文件。
 
-![version](https://img.shields.io/badge/version-0.3.7-blue)
+![version](https://img.shields.io/badge/version-0.4.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-5.x-orange)
 [![安装脚本](https://img.shields.io/badge/%E5%AE%89%E8%A3%85%E8%84%9A%E6%9C%AC-Tampermonkey-2f6fed)](https://ghproxy.net/https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js)
@@ -29,13 +29,13 @@
 2. 打开：
 
    ```
-   https://ghproxy.net/https://ghproxy.net/https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js
+   https://ghproxy.net/https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js
    ```
 
    如果 ghproxy 不可用，改用 jsDelivr：
 
    ```
-   https://cdn.jsdelivr.net/gh/Marcus-Jiang/115-resource-helper@main/115-resource-helper.user.js
+   https://cdn.jsdelivr.net/gh/Marcus-Jiang/115-resource-helper@latest/115-resource-helper.user.js
    ```
 
 3. Tampermonkey 会弹出安装页，点「安装」。
@@ -50,6 +50,12 @@
 3. 或者在 Tampermonkey「实用工具」里从文件导入。
 
 首次使用会弹一次「使用前须知」，确认后不再出现。
+
+### 更新
+
+- 点击面板标题旁的版本号，或 **设置 → 检查更新**。
+- 插件会依次查询 GitHub API、ghproxy、jsDelivr，比较版本；有新版本时给出「去更新」入口。
+- 篡改猴自身也会按 `@updateURL`（ghproxy）自动检查；如果失败，用面板内的检查更新。
 
 ## 使用
 

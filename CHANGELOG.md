@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.4.0] - 2026-11-13
+
+### Added
+
+- In-panel update check: click the version in the panel header or use **设置 → 检查更新**. It queries GitHub API, ghproxy, and jsDelivr, compares `@version`, and offers an install mirror.
+- Multi-mirror release workflow: pushing a `v*` tag creates a GitHub Release with the userscript asset and the matching changelog section. jsDelivr `@latest` resolves the latest release tag.
+
 ## [0.3.7] - 2026-11-12
 
 ### Changed

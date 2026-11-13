@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.3.7
+// @version      0.4.0
 // @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
@@ -23,6 +23,9 @@
 // @connect      lixian.115.com
 // @connect      captchaapi.115.com
 // @connect      my.115.com
+// @connect      api.github.com
+// @connect      cdn.jsdelivr.net
+// @connect      ghproxy.net
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -31,7 +34,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.3.7';
+  const VERSION = '0.4.0';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',
@@ -51,6 +54,16 @@
     captchaSign:   'https://captchaapi.115.com/?ac=code&t=sign',
     captchaVerify: 'https://webapi.115.com/user/captcha',
   };
+
+  const REPO = 'Marcus-Jiang/115-resource-helper';
+  const RAW_URL = `https://raw.githubusercontent.com/${REPO}/main/115-resource-helper.user.js`;
+  const PROXY_URL = `https://ghproxy.net/${RAW_URL}`;
+  const JSDELIVR_URL = `https://cdn.jsdelivr.net/gh/${REPO}@latest/115-resource-helper.user.js`;
+  const UPDATE_SOURCES = [
+    { name: 'GitHub API', url: `https://api.github.com/repos/${REPO}/contents/115-resource-helper.user.js`, api: true, install: PROXY_URL },
+    { name: 'ghproxy', url: PROXY_URL, install: PROXY_URL },
+    { name: 'jsDelivr', url: JSDELIVR_URL, install: JSDELIVR_URL },
+  ];
 
   // ---------------------------------------------------------------- utils
 
@@ -79,6 +92,18 @@
 
   function isHashLike(s) {
     return /^[a-f0-9]{32,40}$/i.test(String(s || '').trim());
+  }
+
+  function cmpVer(a, b) {
+    const pa = String(a || '').split('.').map((x) => Number(x) || 0);
+    const pb = String(b || '').split('.').map((x) => Number(x) || 0);
+    const n = Math.max(pa.length, pb.length);
+    for (let i = 0; i < n; i += 1) {
+      const x = pa[i] || 0;
+      const y = pb[i] || 0;
+      if (x !== y) return x > y ? 1 : -1;
+    }
+    return 0;
   }
 
   const TASK_STATUS = {
@@ -1181,6 +1206,7 @@
     shadow: null,
     els: {},
     sending: false,
+    _checkingUpdate: false,
     taskFilter: 'active',
     _selToastAt: 0,
     _riskTimer: 0,
@@ -1249,7 +1275,7 @@
       this.els.panel = h('div', { class: 'panel', hidden: true },
         h('header', null,
           h('span', { class: 'title', text: '115 资源助手' }),
-          h('span', { class: 'ver', text: 'v' + VERSION }),
+          h('span', { class: 'ver', text: 'v' + VERSION, title: '点击检查更新', style: 'cursor:pointer', onclick: () => this.checkUpdate(true) }),
           h('span', { class: 'spacer' }),
           h('button', {
             class: 'iconbtn', type: 'button', title: '关闭', text: '×',
@@ -1435,6 +1461,7 @@
           h('button', { class: 'btn', type: 'button', text: '检查登录', onclick: () => this.checkLogin() }),
           h('button', { class: 'btn', type: 'button', text: '立即检查', onclick: () => this.checkAll() }),
           h('button', { class: 'btn', type: 'button', text: '诊断', onclick: () => this.diagnose() }),
+          h('button', { class: 'btn', type: 'button', text: '检查更新', onclick: () => this.checkUpdate(true) }),
           h('button', {
             class: 'btn', type: 'button', text: '重置计数',
             onclick: () => { Budget.reset(); this.renderBudget(); this.toast('本小时请求计数已重置', 'success'); },
@@ -1961,6 +1988,27 @@
         this.refreshRisk();
         // 整批推送结束后再启动快速检查，避免和后续推送抢请求队列
         if (ok > 0) Queue.scheduleEarly();
+      }
+    },
+
+    async checkUpdate(force) {
+      if (this._checkingUpdate) return;
+      this._checkingUpdate = true;
+      this.toast('正在检查更新…', 'info', { timeout: 2000 });
+      try {
+        const r = await Update.check(!!force);
+        if (cmpVer(r.latest, VERSION) > 0) {
+          this.toast(`发现新版本 ${r.latest}（当前 ${VERSION}）`, 'info', {
+            action: '去更新', timeout: 20000,
+            onAction: () => { try { window.open(r.url, '_blank', 'noopener'); } catch (_) {} },
+          });
+        } else {
+          this.toast(`已是最新版本 ${VERSION}`, 'success', { timeout: 3000 });
+        }
+      } catch (e) {
+        this.toast(e.message || '检查更新失败', 'error');
+      } finally {
+        this._checkingUpdate = false;
       }
     },
 
@@ -2602,6 +2650,45 @@
           }
         );
       } catch (_) {}
+    },
+  };
+
+  // ---------------------------------------------------------------- update
+
+  const Update = {
+    cacheTtl: 6 * 3600 * 1000,
+    cached() {
+      const c = Store.get('updateCheck', null);
+      return c && c.latest ? c : null;
+    },
+    async sourceVersion(src) {
+      const sep = src.url.includes('?') ? '&' : '?';
+      const res = await rawRequest({
+        method: 'GET',
+        url: src.url + sep + '_=' + now(),
+        headers: { Accept: src.api ? 'application/vnd.github+json' : '*/*' },
+        timeout: 15000,
+      });
+      let text = res.text || '';
+      if (src.api && res.json && res.json.content) {
+        try { text = atob(String(res.json.content).replace(/\s+/g, '')); } catch (_) {}
+      }
+      const m = text.match(/\/\/\s*@version\s+([0-9]+(?:\.[0-9]+)*)/);
+      return m ? m[1] : '';
+    },
+    async check(force) {
+      const c = this.cached();
+      if (!force && c && now() - Number(c.at) < this.cacheTtl) return c;
+      for (const src of UPDATE_SOURCES) {
+        try {
+          const latest = await this.sourceVersion(src);
+          if (!latest) continue;
+          const data = { latest, source: src.name, url: src.install, at: now() };
+          Store.set('updateCheck', data);
+          return data;
+        } catch (_) {}
+      }
+      throw new Error('检查更新失败，请稍后再试');
     },
   };
 
@@ -3429,7 +3516,7 @@
 
   // ---------------------------------------------------------------- exports (debug)
 
-  window.__RH115__ = { NS, VERSION, API, Store, Risk, Budget, Scheduler, Link, Name, Pan115, Organizer, Queue, taskState, UI, log, normalizeEntry, base32ToHex };
+  window.__RH115__ = { NS, VERSION, API, Store, Risk, Budget, Scheduler, Link, Name, Pan115, Organizer, Queue, Update, taskState, UI, log, normalizeEntry, base32ToHex, cmpVer };
 
   // ---------------------------------------------------------------- boot
 

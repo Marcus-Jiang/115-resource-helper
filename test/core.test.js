@@ -33,7 +33,7 @@ vm.runInContext(script, sandbox, { filename: '115-resource-helper.user.js' });
 
 const api = sandbox.window.__RH115__;
 if (!api) throw new Error('脚本没有导出 __RH115__');
-const { Link, Name, Organizer, normalizeEntry, base32ToHex } = api;
+const { Link, Name, Organizer, normalizeEntry, base32ToHex, cmpVer } = api;
 
 let passed = 0;
 function test(name, fn) {
@@ -380,6 +380,13 @@ test('剧集优化：关掉删样片后不按名字删', () => {
   ];
   const plan = Organizer.planEntries(entries, { mode: 'series', deleteSamples: false });
   assert.ok(plan.keeps.some((x) => x.id === '150'));
+});
+
+test('版本比较', () => {
+  assert.ok(cmpVer('0.4.0', '0.3.7') > 0);
+  assert.ok(cmpVer('0.3.7', '0.4.0') < 0);
+  assert.strictEqual(cmpVer('0.4.0', '0.4.0'), 0);
+  assert.ok(cmpVer('0.10.0', '0.9.9') > 0);
 });
 
 console.log(`\n${passed} 项通过${process.exitCode ? '，有失败' : ''}`);
