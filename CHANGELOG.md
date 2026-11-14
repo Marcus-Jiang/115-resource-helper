@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.4.1] - 2026-11-14
+
+### Added
+
+- Flat results (common with ED2K: the file lands directly in the target folder with no folder of its own) are now archived into a new folder named after the resource. The step shows up in the preview, can be unchecked or renamed, and is skipped when the folder name already exists.
+
+### Changed
+
+- Post-push fast check now runs 8 times within the first 9 seconds (0.7/1.5/2.5/3.6/4.8/6/7.5/9s), with follow-up checks at 15/25/40/60s before falling back to the slow interval.
+- Fast checks keep running in background tabs, so switching away no longer stops task detection; returning to the tab polls immediately instead of waiting for the leader lock to expire.
+
 ## [0.4.0] - 2026-11-13
 
 ### Added

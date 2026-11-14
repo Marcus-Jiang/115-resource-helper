@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.4.0
+// @version      0.4.1
 // @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
@@ -34,7 +34,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.4.0';
+  const VERSION = '0.4.1';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',
@@ -992,6 +992,26 @@
       const j = res.json;
       if (!j || j.state === false) throw new Error(j?.error || j?.message || '删除失败');
       return { ok: list.length };
+    },
+
+    async move(ids, pid) {
+      const list = (ids || []).map(String).filter(Boolean);
+      if (!list.length) return { ok: 0, cid: String(pid || '0') };
+      const form = new URLSearchParams();
+      list.forEach((id, i) => form.set(`fid[${i}]`, id));
+      form.set('pid', String(pid || '0'));
+      form.set('move_proid', '');
+      const res = await api({
+        method: 'POST',
+        url: API.move,
+        data: form.toString(),
+        headers: Object.assign({}, JSON_HEADERS, FORM_HEADERS),
+        label: 'move',
+      });
+      const j = res.json;
+      if (!j || j.state === false) throw new Error(j?.error || j?.message || '移动文件失败');
+      this.clearListCache();
+      return { ok: list.length, cid: String(pid || '0') };
     },
 
     async getUser() {
@@ -2194,10 +2214,10 @@
         Queue.update(id, {
           status: 'organized',
           plan: null,
-          summary: `删除 ${result.cleaned} · 改名 ${result.renamed}${result.failed ? ` · 失败 ${result.failed}` : ''}`,
+          summary: `删除 ${result.cleaned} · 改名 ${result.renamed}${result.wrapped ? ` · 归档到 ${result.wrapped.name}` : ''}${result.failed ? ` · 失败 ${result.failed}` : ''}`,
           errors: result.errors,
         });
-        this.toast(`整理完成：删除 ${result.cleaned}，改名 ${result.renamed}`, 'success');
+        this.toast(`整理完成：删除 ${result.cleaned}，改名 ${result.renamed}${result.wrapped ? `，已归档到 ${result.wrapped.name}` : ''}`, 'success');
       } catch (e) {
         Queue.update(id, { status: 'ready', error: e.message });
         this.toast('整理失败：' + e.message, 'error');
@@ -2239,6 +2259,8 @@
       this._previewConfirmed = false;
       this._previewJunkRows = [];
       this._previewRenameRows = [];
+      this._previewWrapCheck = null;
+      this._previewWrapInput = null;
       this.els.previewExec.onclick = () => this.executePreview();
       const body = this.els.previewBody;
       body.innerHTML = '';
@@ -2249,6 +2271,21 @@
         h('div', { text: `${modeLabel ? '模式：' + modeLabel + ' · ' : ''}文件 ${stats.files} · 保留 ${stats.keep}（${fmtBytes(stats.keepBytes)}） · 待删 ${stats.junk}（${fmtBytes(stats.junkBytes)}） · 改名 ${stats.rename}` })
       ));
       for (const w of plan.warnings || []) body.appendChild(h('div', { class: 'previewwarn', text: '⚠ ' + w.text }));
+      if (plan.wrap) {
+        this._previewWrapCheck = h('input', { type: 'checkbox' });
+        this._previewWrapCheck.checked = true;
+        this._previewWrapInput = h('input', { type: 'text', value: plan.wrap.name || '' });
+        this._previewWrapInput.style.flex = '1';
+        body.appendChild(h('div', { class: 'previewsec', text: '归档到新文件夹' }));
+        body.appendChild(h('div', { class: 'previewrow' },
+          this._previewWrapCheck,
+          h('div', { class: 'pname' },
+            h('div', { class: 'previewsec', style: 'margin:0', text: '文件夹名' }),
+            this._previewWrapInput
+          ),
+          h('span', { class: 'pmeta', text: `${plan.wrap.ids.length} 项` })
+        ));
+      }
       if (plan.kind === 'folder') {
         this._previewFolderCheck = h('input', { type: 'checkbox' });
         this._previewFolderCheck.checked = !!(plan.folderRename && plan.folderRename.changed);
@@ -2287,7 +2324,7 @@
           this._previewRenameRows.push({ check, item });
         }
       }
-      if (!plan.junk.length && !plan.renames.length && !(plan.folderRename && plan.folderRename.changed)) {
+      if (!plan.junk.length && !plan.renames.length && !(plan.folderRename && plan.folderRename.changed) && !plan.wrap) {
         body.appendChild(h('div', { class: 'empty', text: '没有需要处理的项' }));
       }
       this.els.previewStatus.textContent = '';
@@ -2308,7 +2345,12 @@
           folderRename = { fileId: plan.rootId, oldName: plan.rootName, newName, changed: true };
         }
       }
-      if (!junk.length && !renames.length && !folderRename) {
+      let wrap = null;
+      if (plan.wrap && this._previewWrapCheck && this._previewWrapCheck.checked) {
+        const name = String(this._previewWrapInput.value || '').trim();
+        if (name) wrap = Object.assign({}, plan.wrap, { name });
+      }
+      if (!junk.length && !renames.length && !folderRename && !wrap) {
         this.toast('没有勾选任何操作', 'warn');
         return;
       }
@@ -2320,7 +2362,7 @@
         this.toast('删除量较大，请再点一次确认', 'warn');
         return;
       }
-      const modified = Object.assign({}, plan, { junk, renames, folderRename });
+      const modified = Object.assign({}, plan, { junk, renames, folderRename, wrap });
       this.els.previewExec.disabled = true;
       this.els.previewStatus.textContent = '正在执行…';
       try {
@@ -2331,11 +2373,11 @@
           Queue.update(task.id, {
             status: 'organized',
             plan: null,
-            summary: `删除 ${result.cleaned} · 改名 ${result.renamed}${result.failed ? ` · 失败 ${result.failed}` : ''}`,
+            summary: `删除 ${result.cleaned} · 改名 ${result.renamed}${result.wrapped ? ` · 归档到 ${result.wrapped.name}` : ''}${result.failed ? ` · 失败 ${result.failed}` : ''}`,
             errors: result.errors,
           });
         }
-        this.toast(`整理完成：删除 ${result.cleaned}，改名 ${result.renamed}`, 'success');
+        this.toast(`整理完成：删除 ${result.cleaned}，改名 ${result.renamed}${result.wrapped ? `，已归档到 ${result.wrapped.name}` : ''}`, 'success');
         setTimeout(() => { this.els.previewOverlay.hidden = true; this.refreshTasks(); }, 900);
       } catch (e) {
         this.els.previewStatus.textContent = '失败：' + e.message;
@@ -3129,6 +3171,25 @@
         if (bi < batches.length - 1) await sleep(800);
       }
 
+      const wrap = plan.wrap;
+      if (wrap && wrap.name && Array.isArray(wrap.ids) && wrap.ids.length) {
+        // 刚删掉的文件不要带进 move 请求
+        const removed = new Set(junk.map((x) => String(x.id)));
+        const moveIds = wrap.ids.map(String).filter((id) => !removed.has(id));
+        if (moveIds.length) {
+          progress('正在新建文件夹并移入…');
+          try {
+            const cid = await Pan115.mkdir(wrap.name, wrap.parentCid || '0');
+            await Pan115.move(moveIds, cid);
+            result.wrapped = { cid, name: wrap.name, count: moveIds.length };
+          } catch (e) {
+            if (e instanceof RiskError) throw e;
+            result.failed += 1;
+            result.errors.push(`归档到文件夹失败：${e.message}`);
+          }
+        }
+      }
+
       const renames = (plan.renames || []).filter((x) => x.changed);
       if (renames.length) {
         progress(`正在改名 ${renames.length} 项…`);
@@ -3239,12 +3300,12 @@
     },
 
     scheduleEarly() {
-      // 推送后 18 秒内快速检查；没完成就回到 10 分钟慢速轮询
+      // 推送后 9 秒内密集检查（每秒级别）；之后留到 60 秒的尾巴，避免秒传任务等到下一次 10 分钟轮询
       if (this._earlyActive) return;
       this._earlyActive = true;
-      try { Store.set('pollLock', { id: this.tabId, until: now() + 2 * 60 * 1000 }); } catch (_) {}
+      try { Store.set('pollLock', { id: this.tabId, until: now() + 2 * 60 * 1000, at: now() }); } catch (_) {}
       const start = now();
-      const delays = [1500, 3000, 5000, 8000, 12000, 18000]; // 从推送时刻起算的绝对时间
+      const delays = [700, 1500, 2500, 3600, 4800, 6000, 7500, 9000, 15000, 25000, 40000, 60000]; // 从推送时刻起算的绝对时间
       let i = 0;
       const tick = async () => {
         this._earlyTimer = 0;
@@ -3268,8 +3329,9 @@
       if (!manual) {
         const mode = Store.get('mode', 'standard');
         if (mode === 'manual' || mode === 'low') return;
-        if (document.hidden) return;
-        if (!this.isLeader()) return;
+        // 快速检查允许在后台标签页继续：切走标签也照样盯着任务
+        if (document.hidden && !early) return;
+        if (!this.isLeader(!!early)) return;
         let interval = Math.max(1, Number(Store.get('pollMinutes', 10)) || 10) * 60 * 1000;
         const oldest = Math.min.apply(null, pending.map((t) => Number(t.addedAt) || now()));
         if (now() - oldest > 30 * 60 * 1000) interval = Math.max(interval, 5 * 60 * 1000);
@@ -3282,7 +3344,8 @@
       try {
         let remote = [];
         try {
-          for (let page = 1; page <= 3; page += 1) {
+          const pages = early ? 2 : 3;
+          for (let page = 1; page <= pages; page += 1) {
             const list = await Pan115.listTasks(page);
             remote.push(...list);
             if (list.length < 30) break;
@@ -3448,9 +3511,34 @@
         return Organizer.planFolder(result.rootId, result.rootName || task.name || '', Object.assign({ targetCid: task.targetCid }, opts));
       }
       if (result.kind === 'flat') {
-        return Organizer.planEntries(result.entries || [], Object.assign({ targetCid: task.targetCid }, opts));
+        const plan = Organizer.planEntries(result.entries || [], Object.assign({ targetCid: task.targetCid }, opts));
+        if (plan) this.attachWrap(plan, task, result);
+        return plan;
       }
       return null;
+    },
+
+    // 平铺结果（ED2K 常见：没有文件夹，文件直接落在目标目录）归档到同名文件夹
+    attachWrap(plan, task, result) {
+      const entries = (result && result.entries) || [];
+      if (!entries.length || !plan.keeps.length) return;
+      const name = this.wrapName(plan, task);
+      if (!name) return;
+      plan.wrap = {
+        parentCid: String((result && result.parentCid) || task.targetCid || '0'),
+        name,
+        ids: entries.map((x) => String(x.id)).filter(Boolean),
+      };
+    },
+
+    wrapName(plan, task) {
+      const keeps = (plan && plan.keeps) || [];
+      const videos = keeps.filter((x) => Organizer.isVideo(x.name));
+      const pool = videos.length ? videos : keeps;
+      const primary = pool.slice().sort((a, b) => (Number(b.size) || 0) - (Number(a.size) || 0))[0];
+      const raw = (primary && primary.name) || task.name || '';
+      const { stem } = Name.splitExt(raw);
+      return Name.clean(stem) || Name.clean(raw) || stem || raw || '';
     },
 
     async waitStable(cid) {
@@ -3464,16 +3552,17 @@
         } catch (e) {
           if (e instanceof RiskError) throw e;
         }
-        if (i < 1) await sleep(1000);
+        if (i < 1) await sleep(400);
       }
       return false;
     },
 
-    isLeader() {
+    isLeader(force) {
       const lock = Store.get('pollLock', null);
       const until = Number(lock && lock.until) || 0;
-      if (lock && lock.id !== this.tabId && until > now()) return false;
-      Store.set('pollLock', { id: this.tabId, until: now() + 2 * 60 * 1000 });
+      // force：刚推送或刚从后台切回来的标签页可以直接接管，避免被不可见标签的空锁挡住
+      if (!force && lock && lock.id !== this.tabId && until > now()) return false;
+      Store.set('pollLock', { id: this.tabId, until: now() + 60 * 1000, at: now() });
       // 回读一次，降低两个标签同时抢到锁的概率
       const check = Store.get('pollLock', null);
       return !!(check && check.id === this.tabId);
@@ -3497,7 +3586,11 @@
         this.poll(false, early).catch((e) => log('poll error', e));
       }, 60 * 1000);
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') this.poll(false, true).catch(() => {});
+        if (document.visibilityState !== 'visible') return;
+        const run = () => this.poll(false, true).catch(() => {});
+        run();
+        // 上一轮轮询可能还没结束，这次会被直接丢弃；补一次，避免切回来还要干等 10 分钟
+        setTimeout(run, 3000);
       });
       window.addEventListener('beforeunload', () => {
         const lock = Store.get('pollLock', null);

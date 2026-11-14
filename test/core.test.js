@@ -389,4 +389,97 @@ test('版本比较', () => {
   assert.ok(cmpVer('0.10.0', '0.9.9') > 0);
 });
 
-console.log(`\n${passed} 项通过${process.exitCode ? '，有失败' : ''}`);
+(async () => {
+  let apassed = 0;
+  async function atest(name, fn) {
+    try {
+      await fn();
+      apassed += 1;
+      console.log('  ok  ' + name);
+    } catch (e) {
+      console.error('FAIL  ' + name);
+      console.error(e && e.stack || e);
+      process.exitCode = 1;
+    }
+  }
+
+  await atest('平铺结果：ED2K 单文件生成同名归档文件夹', async () => {
+    const plan = await api.Queue.buildPlanFor(
+      { id: 't1', name: 'Demo.Movie.2024.1080p.mkv', targetCid: '9' },
+      { kind: 'flat', parentCid: '9', entries: [
+        { id: 'f1', isFolder: false, name: 'Demo.Movie.2024.1080p.mkv', size: 500 * 1024 * 1024 },
+      ] }
+    );
+    assert.strictEqual(plan.wrap.name, 'Demo.Movie.2024.1080p');
+    assert.deepStrictEqual(plan.wrap.ids, ['f1']);
+    assert.strictEqual(plan.wrap.parentCid, '9');
+  });
+
+  await atest('平铺结果：视频+字幕一起移入，名字取视频', async () => {
+    const plan = await api.Queue.buildPlanFor(
+      { id: 't2', name: '【更多资源】Demo.Movie.2024.mkv', targetCid: '9' },
+      { kind: 'flat', parentCid: '9', entries: [
+        { id: 'f1', isFolder: false, name: '【更多资源】Demo.Movie.2024.mkv', size: 500 * 1024 * 1024 },
+        { id: 'f2', isFolder: false, name: 'Demo.Movie.2024.chs.srt', size: 2048 },
+      ] }
+    );
+    assert.strictEqual(plan.wrap.name, 'Demo.Movie.2024');
+    assert.deepStrictEqual(plan.wrap.ids, ['f1', 'f2']);
+  });
+
+  await atest('平铺结果：全部判为垃圾时不建文件夹', async () => {
+    const plan = await api.Queue.buildPlanFor(
+      { id: 't3', name: '最新地址.com.txt', targetCid: '9' },
+      { kind: 'flat', parentCid: '9', entries: [
+        { id: 'f1', isFolder: false, name: '最新地址.com.txt', size: 1024 },
+      ] }
+    );
+    assert.strictEqual(plan.wrap, undefined);
+  });
+
+  await atest('整理执行：先删除，再建目录移入', async () => {
+    const calls = [];
+    const orig = { mkdir: api.Pan115.mkdir, move: api.Pan115.move, renameMany: api.Pan115.renameMany, deleteMany: api.Pan115.deleteMany };
+    api.Pan115.mkdir = async (name, pid) => { calls.push(['mkdir', name, pid]); return 'newcid'; };
+    api.Pan115.move = async (ids, pid) => { calls.push(['move', ids.slice(), pid]); return { ok: ids.length }; };
+    api.Pan115.renameMany = async () => { calls.push(['rename']); return { ok: 0, failed: [] }; };
+    api.Pan115.deleteMany = async (ids) => { calls.push(['delete', ids.slice()]); return { ok: ids.length }; };
+    try {
+      const res = await api.Organizer.apply({
+        kind: 'flat', mode: 'movie',
+        junk: [{ id: 'j1', isFolder: false, name: 'ad.txt', size: 1 }],
+        renames: [],
+        folderRename: null,
+        stats: { totalBytes: 100 },
+        wrap: { parentCid: '9', name: 'Demo.Movie.2024', ids: ['j1', 'f1', 'f2'] },
+      });
+      assert.deepStrictEqual(calls, [['delete', ['j1']], ['mkdir', 'Demo.Movie.2024', '9'], ['move', ['f1', 'f2'], 'newcid']]);
+      assert.strictEqual(res.wrapped.name, 'Demo.Movie.2024');
+      assert.strictEqual(res.wrapped.count, 2);
+      assert.strictEqual(res.failed, 0);
+    } finally {
+      Object.assign(api.Pan115, orig);
+    }
+  });
+
+  await atest('整理执行：建目录失败不影响其余流程', async () => {
+    const orig = { mkdir: api.Pan115.mkdir, move: api.Pan115.move };
+    api.Pan115.mkdir = async () => { throw new Error('同名文件夹已存在'); };
+    api.Pan115.move = async () => { throw new Error('不应调用'); };
+    try {
+      const res = await api.Organizer.apply({
+        kind: 'flat', mode: 'movie', junk: [], renames: [], folderRename: null,
+        stats: { totalBytes: 1 },
+        wrap: { parentCid: '9', name: 'X', ids: ['f1'] },
+      });
+      assert.strictEqual(res.wrapped, undefined);
+      assert.strictEqual(res.failed, 1);
+      assert.ok(res.errors[0].includes('归档到文件夹失败'));
+    } finally {
+      Object.assign(api.Pan115, orig);
+    }
+  });
+
+  console.log(`
+${passed + apassed} 项通过${process.exitCode ? '，有失败' : ''}`);
+})();
