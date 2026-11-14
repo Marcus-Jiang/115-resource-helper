@@ -9,6 +9,7 @@ const assert = require('assert');
 
 const script = fs.readFileSync(path.join(__dirname, '..', '115-resource-helper.user.js'), 'utf8');
 
+const gmStore = new Map();
 const sandbox = {
   window: {},
   document: {
@@ -20,9 +21,9 @@ const sandbox = {
   clearTimeout,
   setInterval,
   clearInterval,
-  GM_getValue: () => undefined,
-  GM_setValue: () => {},
-  GM_deleteValue: () => {},
+  GM_getValue: (k, d) => (gmStore.has(k) ? gmStore.get(k) : d),
+  GM_setValue: (k, v) => { gmStore.set(k, v); },
+  GM_deleteValue: (k) => { gmStore.delete(k); },
   GM_xmlhttpRequest: () => {},
   GM_registerMenuCommand: () => {},
   GM_addValueChangeListener: () => {},
@@ -33,7 +34,7 @@ vm.runInContext(script, sandbox, { filename: '115-resource-helper.user.js' });
 
 const api = sandbox.window.__RH115__;
 if (!api) throw new Error('脚本没有导出 __RH115__');
-const { Link, Name, Organizer, normalizeEntry, base32ToHex, cmpVer } = api;
+const { Link, Name, Organizer, normalizeEntry, base32ToHex, cmpVer, taskState } = api;
 
 let passed = 0;
 function test(name, fn) {
@@ -380,6 +381,30 @@ test('剧集优化：关掉删样片后不按名字删', () => {
   ];
   const plan = Organizer.planEntries(entries, { mode: 'series', deleteSamples: false });
   assert.ok(plan.keeps.some((x) => x.id === '150'));
+});
+
+test('小时请求预算用完后抛错且不继续计数', () => {
+  const { Budget } = api;
+  api.Store.set('budgetPerHour', 50);
+  Budget.reset();
+  for (let i = 0; i < 50; i += 1) Budget.take();
+  assert.strictEqual(Budget.used(), 50);
+  assert.throws(() => Budget.take(), /上限/);
+  assert.strictEqual(Budget.used(), 50);
+  api.Store.set('budgetPerHour', 300);
+  Budget.reset();
+});
+
+test('115 原始状态码映射', () => {
+  assert.strictEqual(taskState(-1), 'failed');
+  assert.strictEqual(taskState(0), 'todo');
+  assert.strictEqual(taskState(1), 'running');
+  assert.strictEqual(taskState(2), 'done');
+  assert.strictEqual(taskState(3), 'failed');
+  assert.strictEqual(taskState(9), 'failed');
+  assert.strictEqual(taskState(10), 'done');
+  assert.strictEqual(taskState(11), 'done');
+  assert.strictEqual(taskState(12), 'running');
 });
 
 test('版本比较', () => {

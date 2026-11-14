@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.4.2] - 2026-11-14
+
+### Fixed
+
+- Send failures now show the real reason (115 error code, or a snippet of the raw response) instead of the generic “发送失败，请查看上方提示”, and the message is also raised as a toast so it is visible from any tab.
+- Exhausting the hourly request budget is no longer silent: “立即检查” reports it instead of saying “检查完成”, and a toast fires when the limit is reached. The counter resets at the top of each hour.
+- Tasks where 115 keeps reporting status `0` after the download has finished are now resolved after 5 minutes by comparing the target folder against the pre-push snapshot.
+
+### Changed
+
+- Task cards show the raw 115 status together with a Chinese label, e.g. `115 状态 0（等待下载）`.
+- Fast post-push checks only fetch the first task-list page, and returning to a tab no longer triggers a duplicate check unless the previous one was still running. Heavy pushing/testing no longer burns through the hourly budget as quickly.
+
 ## [0.4.1] - 2026-11-14
 
 ### Added

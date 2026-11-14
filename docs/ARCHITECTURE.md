@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the internal structure of `115-resource-helper.user.js` (v0.4.1). It is a single-file Tampermonkey userscript with no build step and no runtime dependencies.
+This document describes the internal structure of `115-resource-helper.user.js` (v0.4.2). It is a single-file Tampermonkey userscript with no build step and no runtime dependencies.
 
 ## Data flow
 

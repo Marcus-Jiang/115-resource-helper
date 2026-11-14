@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.4.1
+// @version      0.4.2
 // @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
@@ -34,7 +34,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.4.1';
+  const VERSION = '0.4.2';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',
@@ -105,6 +105,19 @@
     }
     return 0;
   }
+
+  // 115 任务列表里的原始状态码（老接口 status，新接口 stat）
+  const REMOTE_STATE = {
+    '-1': '失败',
+    0: '等待下载',
+    1: '下载中',
+    2: '已完成',
+    3: '失败',
+    9: '失败',
+    10: '已完成',
+    11: '已完成',
+    12: '进行中',
+  };
 
   const TASK_STATUS = {
     pending: '等待下载',
@@ -308,6 +321,13 @@
 
   // ---------------------------------------------------------------- budget
 
+  class BudgetError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = 'BudgetError';
+    }
+  }
+
   const Budget = {
     limit() { return Math.max(50, Number(Store.get('budgetPerHour', 300)) || 300); },
     used() {
@@ -320,10 +340,13 @@
       if (!b || b.k !== k) b = { k, n: 0 };
       const limit = this.limit();
       if (b.n >= limit) {
-        throw new Error(`本小时 115 请求已达上限（${limit} 次），请在设置里调整或下个整点再试`);
+        throw new BudgetError(`本小时 115 请求已达上限（${limit} 次），整点自动恢复；可在设置里调高预算或点「重置计数」`);
       }
       b.n += 1;
       Store.set('budget', b);
+      if (b.n === limit && UI.ready) {
+        UI.toast(`本小时 115 请求已达上限（${limit} 次），整点自动恢复`, 'warn', { timeout: 8000 });
+      }
       if (b.n === Math.ceil(limit * 0.7) && UI.ready) {
         UI.toast(`本小时 115 请求已用 ${b.n}/${limit}`, 'warn');
       }
@@ -766,10 +789,12 @@
       if (j && j.state) return { ok: true, duplicate: false };
       const code = String(j?.errcode ?? j?.errno ?? j?.code ?? '');
       if (code === '10008') return { ok: true, duplicate: true };
+      const detail = j?.error_msg || j?.msg || j?.error;
+      const snippet = res.text ? String(res.text).replace(/\s+/g, ' ').slice(0, 120) : '';
       return {
         ok: false,
         code,
-        message: j?.error_msg || j?.msg || j?.error || ('HTTP ' + res.status),
+        message: detail || (code ? `错误码 ${code}` : `HTTP ${res.status}${snippet ? ' · ' + snippet : ''}`),
       };
     },
 
@@ -1948,6 +1973,7 @@
       let ok = 0;
       let dup = 0;
       let fail = 0;
+      let lastError = '';
       try {
         for (let i = 0; i < max; i += 1) {
           const link = links[i];
@@ -1979,26 +2005,30 @@
               });
             } else {
               fail += 1;
-              this.setStatus(`第 ${i + 1} 个失败：${r.message}`, 'error');
+              lastError = `第 ${i + 1} 个：${r.message || ('错误码 ' + (r.code || '未知'))}`;
+              this.setStatus(lastError, 'error');
             }
           } catch (e) {
             fail += 1;
-            this.setStatus(e.message || '发送失败', 'error');
+            lastError = e.message || '发送失败';
+            this.setStatus(lastError, 'error');
             if (e instanceof RiskError || e.risk) break;
           }
         }
         if (ok > 0) {
           const summary = `已发送 ${ok} 个${dup ? `（重复 ${dup} 个）` : ''}${fail ? `，失败 ${fail} 个` : ''}`;
-          this.setStatus(summary, 'success');
-          this.toast(summary, 'success', {
-            action: '查看任务', timeout: 6000,
+          this.setStatus(summary + (fail && lastError ? `；${lastError}` : ''), fail ? 'warn' : 'success');
+          this.toast(summary + (fail && lastError ? `；${lastError}` : ''), fail ? 'warn' : 'success', {
+            action: '查看任务', timeout: 8000,
             onAction: () => this.openTasks(),
           });
           if (ok === links.length) this.els.links.value = '';
           // 发送成功后自动切到任务页
           setTimeout(() => { if (!this.els.panel.hidden) this.showTab('tasks'); }, 500);
         } else if (fail > 0) {
-          this.setStatus('发送失败，请查看上方提示', 'error');
+          const msg = lastError ? `发送失败：${lastError}` : '发送失败，请查看上方提示';
+          this.setStatus(msg, 'error');
+          this.toast(msg, 'error', { timeout: 10000 });
         }
       } finally {
         this.sending = false;
@@ -2112,9 +2142,12 @@
       );
       if (t.remote && t.remote.status !== undefined && t.remote.status !== null && t.remote.status !== -999) {
         const pct = Number(t.remote.percent) || 0;
+        const code = String(t.remote.status);
+        const label = REMOTE_STATE[code];
         card.appendChild(h('div', {
           class: 'taskmeta',
-          text: `115 状态 ${t.remote.status}${pct > 0 ? ` · ${Math.round(pct)}%` : ''}`,
+          text: `115 状态 ${code}${label ? `（${label}）` : ''}${pct > 0 ? ` · ${Math.round(pct)}%` : ''}`,
+          title: '0 等待下载 · 1 下载中 · 2/10/11 已完成 · -1/3/9 失败 · 12 进行中',
         }));
       }
       if (t.error) card.appendChild(h('div', { class: 'taskmeta warn', text: t.error }));
@@ -3344,14 +3377,16 @@
       try {
         let remote = [];
         try {
-          const pages = early ? 2 : 3;
+          const pages = early ? 1 : 3;
           for (let page = 1; page <= pages; page += 1) {
             const list = await Pan115.listTasks(page);
             remote.push(...list);
             if (list.length < 30) break;
           }
         } catch (e) {
-          if (e instanceof RiskError) return;
+          // 预算用完不算一次有效轮询，整点恢复后要能立刻重试
+          if (e instanceof BudgetError) { this.lastPollAt = 0; throw e; }
+          if (e instanceof RiskError) throw e;
           log('poll task list failed', e);
           return;
         }
@@ -3373,9 +3408,12 @@
             if (state === 'done') await this.finalize(task.id, rt);
             else if (state === 'failed') this.update(task.id, { status: 'failed', error: '115 任务失败', finishedAt: now() });
             else {
-              // 有的任务状态会滞后在“进行中”，但 percentDone 已经 100：用目录差异兜底
+              // 有的任务状态会滞后在“进行中”或一直停在“等待下载”，用目录差异兜底
               const pct = Number(rt.percent) || 0;
-              if (pct >= 100 && now() - (Number(task.addedAt) || 0) > 60 * 1000 && now() - (Number(task.lastDiffAt) || 0) > 60 * 1000) {
+              const age = now() - (Number(task.addedAt) || 0);
+              const stalledTodo = state === 'todo' && age > 5 * 60 * 1000;
+              const diffDue = now() - (Number(task.lastDiffAt) || 0) > 60 * 1000;
+              if (diffDue && ((pct >= 100 && age > 60 * 1000) || stalledTodo)) {
                 this.update(task.id, { lastDiffAt: now() });
                 const result = await this.detectByDiff(task);
                 if (result) await this.finalize(task.id, rt, result);
@@ -3588,9 +3626,10 @@
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'visible') return;
         const run = () => this.poll(false, true).catch(() => {});
+        const busy = this.polling;
         run();
-        // 上一轮轮询可能还没结束，这次会被直接丢弃；补一次，避免切回来还要干等 10 分钟
-        setTimeout(run, 3000);
+        // 上一轮轮询还没结束时这次会被直接丢弃，补一次；否则不重复请求
+        if (busy) setTimeout(run, 3000);
       });
       window.addEventListener('beforeunload', () => {
         const lock = Store.get('pollLock', null);
