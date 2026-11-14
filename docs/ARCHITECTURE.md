@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the internal structure of `115-resource-helper.user.js` (v0.4.2). It is a single-file Tampermonkey userscript with no build step and no runtime dependencies.
+This document describes the internal structure of `115-resource-helper.user.js` (v0.5.0). It is a single-file Tampermonkey userscript with no build step and no runtime dependencies.
 
 ## Data flow
 
@@ -45,10 +45,9 @@ Link.extract  ──►  UI.send
 | Module | Responsibility |
 |---|---|
 | `Store` | GM storage wrapper, defaults, settings migration |
-| `Budget` | Hourly request counter shared by all 115 calls |
 | `Risk` | `911` / `590075` / login-expired state, cross-tab sync, probe after verification |
 | `Scheduler` | Serial request queue, minimum gap, jitter, pause/block |
-| `rawRequest` / `api` | `GM_xmlhttpRequest` wrapper, JSON parsing, risk detection, budget |
+| `rawRequest` / `api` | `GM_xmlhttpRequest` wrapper, JSON parsing, risk detection |
 | `Pan115` | Sign, offline add, task list, APS/webapi listing, path→cid, mkdir, rename, delete, move |
 | `Link` | Magnet/ed2k extraction, dedupe, trim, base32→hex |
 | `Name` | Ad-token cleanup, bracket handling, subtitle/sample/extra name detection |
@@ -64,18 +63,15 @@ Link.extract  ──►  UI.send
 | `dirUsage` | Usage stats for automatic common directories |
 | `tasks` | Up to 30 task records, including plans for `ready` tasks |
 | `risk` | Current risk state and last 911 time |
-| `budget` | Current hour request count |
-| `pushLog` | Timestamps of pushes in the current hour |
 | `pollLock` | Leader-tab lease for polling |
 | `resourceMode`, `minVideoMB`, `keepRatio`, `minAudioMB`, `keepImages`, `keepNfo`, `keepSubtitles`, `deleteSamples`, `keepExtras` | Organizer rules |
-| `autoOrganize`, `pollMinutes`, `mode`, `pushGapMs`, `pushPerHour`, `budgetPerHour` | Behavior settings |
+| `autoOrganize`, `pollMinutes`, `mode`, `pushGapMs` | Behavior settings |
 | `favoritePaths`, `recentPaths` | Legacy; migrated into `dirUsage` |
 
 ## Request scheduling and risk control
 
 - All 115 calls go through `Scheduler`, which enforces one in-flight request and a minimum gap (1.2s ± jitter in standard mode, 2.5s in low mode, 3s in manual mode).
-- `Budget` limits the total to 300 requests/hour (configurable).
-- Push spacing is 10 seconds and 20 pushes/hour by default.
+- Push spacing is 10 seconds by default.
 - After a push, the tab that pushed takes the polling lock and checks 8 times in the first 9 seconds (0.7/1.5/2.5/3.6/4.8/6/7.5/9s), then at 15/25/40/60 seconds; if the task is still not done, polling drops to every 10 minutes.
 - Fast checks keep running while the tab is hidden; slow polling still requires a visible leader tab. Returning to the tab forces a check immediately.
 - `911` blocks the scheduler and opens a modal; the user verifies on 115, then `Risk.probe()` checks the sign endpoint. A 10-minute cooldown follows.

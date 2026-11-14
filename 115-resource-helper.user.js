@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.4.2
+// @version      0.5.0
 // @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
@@ -34,7 +34,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.4.2';
+  const VERSION = '0.5.0';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',
@@ -182,11 +182,6 @@
     return node;
   }
 
-  function hourKey() {
-    const d = new Date();
-    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}-${d.getHours()}`;
-  }
-
   function log(...args) {
     try { console.debug('[115助手]', ...args); } catch (_) {}
   }
@@ -199,15 +194,11 @@
     recentPaths: [],
     mode: 'standard',        // standard | low | manual
     pushGapMs: 10000,
-    pushPerHour: 20,
-    budgetPerHour: 300,
     trimMagnet: true,
     copyToast: true,
     ballPos: null,
     firstRun: true,
     risk: { state: 'normal', until: 0, last911: 0, message: '' },
-    budget: { k: '', n: 0 },
-    pushLog: [],
     tasks: [],
     pollMinutes: 10,
     autoOrganize: false,
@@ -317,42 +308,6 @@
       if (UI.ready) UI.toast('仍未通过验证，请先在 115 页面完成人机验证', 'error');
       return false;
     },
-  };
-
-  // ---------------------------------------------------------------- budget
-
-  class BudgetError extends Error {
-    constructor(message) {
-      super(message);
-      this.name = 'BudgetError';
-    }
-  }
-
-  const Budget = {
-    limit() { return Math.max(50, Number(Store.get('budgetPerHour', 300)) || 300); },
-    used() {
-      const b = Store.get('budget', { k: '', n: 0 });
-      return b && b.k === hourKey() ? Number(b.n) || 0 : 0;
-    },
-    take() {
-      const k = hourKey();
-      let b = Store.get('budget', { k: '', n: 0 });
-      if (!b || b.k !== k) b = { k, n: 0 };
-      const limit = this.limit();
-      if (b.n >= limit) {
-        throw new BudgetError(`本小时 115 请求已达上限（${limit} 次），整点自动恢复；可在设置里调高预算或点「重置计数」`);
-      }
-      b.n += 1;
-      Store.set('budget', b);
-      if (b.n === limit && UI.ready) {
-        UI.toast(`本小时 115 请求已达上限（${limit} 次），整点自动恢复`, 'warn', { timeout: 8000 });
-      }
-      if (b.n === Math.ceil(limit * 0.7) && UI.ready) {
-        UI.toast(`本小时 115 请求已用 ${b.n}/${limit}`, 'warn');
-      }
-      return b.n;
-    },
-    reset() { Store.set('budget', { k: hourKey(), n: 0 }); },
   };
 
   // ---------------------------------------------------------------- http
@@ -520,7 +475,6 @@
 
   async function api(opts) {
     return Scheduler.enqueue(async () => {
-      Budget.take();
       const res = await rawRequest(opts);
       if (res.risk) {
         handleRisk(res.risk);
@@ -1358,7 +1312,6 @@
       this.renderPath();
       this.renderFavorites();
       this.renderSettings();
-      this.renderBudget();
       this.refreshTasks();
       this.refreshRisk();
 
@@ -1432,8 +1385,6 @@
         h('option', { value: 'manual' }, '全手动')
       );
       const gap = h('input', { type: 'number', min: '3', max: '600', step: '1' });
-      const pushLimit = h('input', { type: 'number', min: '1', max: '100', step: '1' });
-      const budget = h('input', { type: 'number', min: '50', max: '2000', step: '50' });
       const trim = h('input', { type: 'checkbox' });
       const copy = h('input', { type: 'checkbox' });
       const auto = h('input', { type: 'checkbox' });
@@ -1454,12 +1405,9 @@
       );
       const pollMin = h('input', { type: 'number', min: '1', max: '120', step: '1' });
       const pathText = h('span', { class: 'path empty', text: '未设置' });
-      const budgetText = h('div', { class: 'hint' });
 
       this.els.cfgMode = mode;
       this.els.cfgGap = gap;
-      this.els.cfgPushLimit = pushLimit;
-      this.els.cfgBudget = budget;
       this.els.cfgTrim = trim;
       this.els.cfgCopy = copy;
       this.els.cfgAuto = auto;
@@ -1474,7 +1422,6 @@
       this.els.cfgResMode = resMode;
       this.els.cfgPoll = pollMin;
       this.els.cfgPathText = pathText;
-      this.els.budgetText = budgetText;
 
       return h('section', { hidden: true },
         this.field('默认目录',
@@ -1485,8 +1432,6 @@
         ),
         this.field('模式', mode, '标准：正常节奏；低频：更慢；全手动：最慢，适合谨慎使用。'),
         this.field('推送间隔（秒）', gap, '两条磁力之间至少间隔多久。'),
-        this.field('每小时推送上限', pushLimit, '超过后本小时不再推送。'),
-        this.field('每小时请求预算', budget, '所有 115 请求共享，达到后自动暂停。'),
         h('label', { class: 'checkrow' }, trim, h('span', { text: '精简磁力链接（只保留 xt 和 dn）' })),
         h('label', { class: 'checkrow' }, copy, h('span', { text: '复制链接时弹出“发送到 115”提示' })),
         h('div', { class: 'previewsec', text: '整理规则' }),
@@ -1500,19 +1445,14 @@
         h('label', { class: 'checkrow' }, keepSubs, h('span', { text: '强制保留字幕（推荐）' })),
         h('label', { class: 'checkrow' }, keepImages, h('span', { text: '保留图片（海报/封面等）' })),
         h('label', { class: 'checkrow' }, keepNfo, h('span', { text: '保留 NFO 文件' })),
-        this.field('轮询间隔（分钟）', pollMin, '推送后前 18 秒会快速检查；之后按这个间隔慢速检查。'),
+        this.field('轮询间隔（分钟）', pollMin, '推送后 9 秒内会密集检查，之后按这个间隔慢速检查。'),
         h('div', { class: 'btnrow' },
           h('button', { class: 'btn primary', type: 'button', text: '保存设置', onclick: () => this.saveSettings() }),
           h('button', { class: 'btn', type: 'button', text: '检查登录', onclick: () => this.checkLogin() }),
           h('button', { class: 'btn', type: 'button', text: '立即检查', onclick: () => this.checkAll() }),
           h('button', { class: 'btn', type: 'button', text: '诊断', onclick: () => this.diagnose() }),
-          h('button', { class: 'btn', type: 'button', text: '检查更新', onclick: () => this.checkUpdate(true) }),
-          h('button', {
-            class: 'btn', type: 'button', text: '重置计数',
-            onclick: () => { Budget.reset(); this.renderBudget(); this.toast('本小时请求计数已重置', 'success'); },
-          })
-        ),
-        budgetText
+          h('button', { class: 'btn', type: 'button', text: '检查更新', onclick: () => this.checkUpdate(true) })
+        )
       );
     },
 
@@ -1702,7 +1642,6 @@
       this.renderPath();
       this.renderFavorites();
       this.renderSettings();
-      this.renderBudget();
       this.refreshRisk();
       setTimeout(() => {
         try { this.els.links.focus({ preventScroll: true }); } catch (_) {}
@@ -1718,8 +1657,7 @@
       this.els.setSec.hidden = name !== 'settings';
       if (name === 'settings') {
         this.renderSettings();
-        this.renderBudget();
-      }
+        }
       if (name === 'tasks') this.refreshTasks();
     },
 
@@ -1849,8 +1787,6 @@
       const mode = String(Store.get('mode', 'standard') || 'standard');
       this.els.cfgMode.value = ['standard', 'low', 'manual'].includes(mode) ? mode : 'standard';
       this.els.cfgGap.value = Math.round((Number(Store.get('pushGapMs', 10000)) || 10000) / 1000);
-      this.els.cfgPushLimit.value = Number(Store.get('pushPerHour', 20)) || 20;
-      this.els.cfgBudget.value = Number(Store.get('budgetPerHour', 300)) || 300;
       this.els.cfgTrim.checked = !!Store.get('trimMagnet', true);
       this.els.cfgCopy.checked = !!Store.get('copyToast', true);
       this.els.cfgAuto.checked = !!Store.get('autoOrganize', false);
@@ -1871,12 +1807,8 @@
     saveSettings() {
       const mode = ['standard', 'low', 'manual'].includes(this.els.cfgMode.value) ? this.els.cfgMode.value : 'standard';
       const gapSec = clamp(Number(this.els.cfgGap.value) || 10, 3, 600);
-      const pushLimit = clamp(Number(this.els.cfgPushLimit.value) || 20, 1, 100);
-      const budget = clamp(Number(this.els.cfgBudget.value) || 300, 50, 2000);
       Store.set('mode', mode);
       Store.set('pushGapMs', Math.round(gapSec * 1000));
-      Store.set('pushPerHour', Math.round(pushLimit));
-      Store.set('budgetPerHour', Math.round(budget));
       Store.set('trimMagnet', !!this.els.cfgTrim.checked);
       Store.set('copyToast', !!this.els.cfgCopy.checked);
       Store.set('autoOrganize', !!this.els.cfgAuto.checked);
@@ -1891,27 +1823,7 @@
       const rm = this.els.cfgResMode.value;
       Store.set('resourceMode', ['movie', 'series', 'music', 'software', 'generic'].includes(rm) ? rm : 'movie');
       Store.set('pollMinutes', clamp(Number(this.els.cfgPoll.value) || 10, 1, 120));
-      this.renderBudget();
       this.toast('设置已保存', 'success');
-    },
-
-    renderBudget() {
-      if (!this.els.budgetText) return;
-      const cap = this.canPush();
-      this.els.budgetText.textContent =
-        `本小时：请求 ${Budget.used()}/${Budget.limit()} 次 · 推送 ${cap.count}/${cap.limit} 条`;
-    },
-
-    canPush() {
-      const log = (Store.get('pushLog', []) || []).filter((t) => now() - t < 3600 * 1000);
-      const limit = Math.max(1, Number(Store.get('pushPerHour', 20)) || 20);
-      return { ok: log.length < limit, count: log.length, limit };
-    },
-
-    recordPush() {
-      const log = (Store.get('pushLog', []) || []).filter((t) => now() - t < 3600 * 1000);
-      log.push(now());
-      Store.set('pushLog', log);
     },
 
     pushGap() {
@@ -1961,12 +1873,7 @@
       }
       this.recordDir(String(Store.get('defaultPath', '') || ''), cid, '');
 
-      const cap = this.canPush();
-      if (!cap.ok) {
-        this.setStatus(`本小时已推送 ${cap.count}/${cap.limit} 条，已达上限`, 'error');
-        return;
-      }
-      const max = Math.min(links.length, 20, cap.limit - cap.count);
+      const max = links.length;
       this.sending = true;
       this.els.sendBtn.disabled = true;
       this.els.sendBtn.textContent = '发送中…';
@@ -1980,8 +1887,6 @@
           this.setStatus(`正在发送 ${i + 1}/${max}…`);
           if (i > 0) await sleep(this.pushGap());
           try {
-            this.recordPush();
-            this.renderBudget();
             const snap = await Queue.snapshot(cid);
             const r = await Pan115.addTask(link.url, cid);
             if (r.ok) {
@@ -2034,8 +1939,7 @@
         this.sending = false;
         this.els.sendBtn.disabled = false;
         this.els.sendBtn.textContent = '发送到 115';
-        this.renderBudget();
-        this.refreshRisk();
+          this.refreshRisk();
         // 整批推送结束后再启动快速检查，避免和后续推送抢请求队列
         if (ok > 0) Queue.scheduleEarly();
       }
@@ -2070,7 +1974,6 @@
         this.toast(e.message || '检查登录失败', 'error');
         if (e.risk) this.showRiskModal(e.risk);
       }
-      this.renderBudget();
     },
 
     // ---- tasks / organizer
@@ -3384,8 +3287,6 @@
             if (list.length < 30) break;
           }
         } catch (e) {
-          // 预算用完不算一次有效轮询，整点恢复后要能立刻重试
-          if (e instanceof BudgetError) { this.lastPollAt = 0; throw e; }
           if (e instanceof RiskError) throw e;
           log('poll task list failed', e);
           return;
@@ -3648,7 +3549,7 @@
 
   // ---------------------------------------------------------------- exports (debug)
 
-  window.__RH115__ = { NS, VERSION, API, Store, Risk, Budget, Scheduler, Link, Name, Pan115, Organizer, Queue, Update, taskState, UI, log, normalizeEntry, base32ToHex, cmpVer };
+  window.__RH115__ = { NS, VERSION, API, Store, Risk, Scheduler, Link, Name, Pan115, Organizer, Queue, Update, taskState, UI, log, normalizeEntry, base32ToHex, cmpVer };
 
   // ---------------------------------------------------------------- boot
 

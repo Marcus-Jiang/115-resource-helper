@@ -383,18 +383,6 @@ test('剧集优化：关掉删样片后不按名字删', () => {
   assert.ok(plan.keeps.some((x) => x.id === '150'));
 });
 
-test('小时请求预算用完后抛错且不继续计数', () => {
-  const { Budget } = api;
-  api.Store.set('budgetPerHour', 50);
-  Budget.reset();
-  for (let i = 0; i < 50; i += 1) Budget.take();
-  assert.strictEqual(Budget.used(), 50);
-  assert.throws(() => Budget.take(), /上限/);
-  assert.strictEqual(Budget.used(), 50);
-  api.Store.set('budgetPerHour', 300);
-  Budget.reset();
-});
-
 test('115 原始状态码映射', () => {
   assert.strictEqual(taskState(-1), 'failed');
   assert.strictEqual(taskState(0), 'todo');

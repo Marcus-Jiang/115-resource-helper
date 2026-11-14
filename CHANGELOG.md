@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.5.0] - 2026-11-14
+
+### Removed
+
+- Hourly push limit and hourly request budget. Requests still go through the serial scheduler (1.2s gap) and the per-push spacing still applies, but the hourly counters, their settings fields and the “reset counter” button are gone.
+- Related storage keys (`budget`, `pushLog`), the `Budget` module, and the budget-specific error handling.
+
 ## [0.4.2] - 2026-11-14
 
 ### Fixed

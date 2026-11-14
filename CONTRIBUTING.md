@@ -48,7 +48,7 @@ scripts/set-repo.mjs          fill GitHub owner/repo placeholders
 - Keep the project a **single userscript** with no runtime dependencies.
 - All 115 requests must go through `api()` and `Scheduler`. Do not call `GM_xmlhttpRequest` directly for 115 endpoints.
 - New 115 hosts must be added to `@connect`.
-- Respect the request budget: no aggressive polling, no parallel 115 requests, and stop on `911` / `590075`.
+- Respect the request spacing: no aggressive polling, no parallel 115 requests, and stop on `911` / `590075`.
 - Put pure logic in `Name` / `Organizer` and cover it in `test/core.test.js`.
 - UI text and comments are Chinese; code identifiers stay English.
 - Any deletion must remain previewable. Keep the largest-file, subtitle, conservative-mode, and recycle-bin guards.

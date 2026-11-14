@@ -2,7 +2,7 @@
 
 ## Done
 
-- **P0–P1**: link capture, 115 push, directory picker, default directory, request scheduler, risk state, hourly budget.
+- **P0–P1**: link capture, 115 push, directory picker, default directory, request scheduler, risk state.
 - **P2**: persistent task queue, low-frequency polling, result-folder detection, task page, multi-tab sync.
 - **P3**: name cleanup, junk classification, preview, batch delete, per-file rename, manual organize of any directory, resource modes, subtitle protection, series sample/extras rules.
 
