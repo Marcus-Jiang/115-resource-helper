@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         115 资源助手
 // @namespace    https://github.com/115-resource-helper
-// @version      0.5.0
-// @description  选中/复制磁力链接，一键推送到 115 云下载；低风控请求调度；下载完成后整理文件名与垃圾文件
+// @version      0.6.0
+// @description  选中/复制磁力链接，一键推送到 115 云下载；阿里云盘分享一键转存并生成哈希清单；低风控请求调度；下载完成后整理文件名与垃圾文件
 // @author       115 Resource Helper contributors
 // @license      MIT
 // @homepageURL  https://github.com/Marcus-Jiang/115-resource-helper
@@ -17,12 +17,21 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_addValueChangeListener
 // @grant        GM_notification
+// @grant        unsafeWindow
 // @connect      115.com
 // @connect      webapi.115.com
 // @connect      aps.115.com
 // @connect      lixian.115.com
 // @connect      captchaapi.115.com
 // @connect      my.115.com
+// @connect      api.aliyundrive.com
+// @connect      auth.aliyundrive.com
+// @connect      aliyundrive.com
+// @connect      www.aliyundrive.com
+// @connect      api.alipan.com
+// @connect      auth.alipan.com
+// @connect      alipan.com
+// @connect      www.alipan.com
 // @connect      api.github.com
 // @connect      cdn.jsdelivr.net
 // @connect      ghproxy.net
@@ -34,7 +43,7 @@
   'use strict';
 
   const NS = 'rh115';
-  const VERSION = '0.5.0';
+  const VERSION = '0.6.0';
 
   const API = {
     sign:          'https://115.com/?ct=offline&ac=space',
@@ -215,6 +224,9 @@
     deleteSamples: true,
     keepExtras: true,
     pollLock: null,
+    aliyunToken: null,
+    aliyunTargetPath: '/115搬运',
+    aliyunSplitFolder: true,
   };
 
   const Store = {
@@ -1006,6 +1018,443 @@
     },
   };
 
+  // ---------------------------------------------------------------- aliyun
+
+  // 阿里云盘网页版接口。与 115 的 Scheduler 完全隔离：115 风控不应该阻塞阿里云盘请求。
+  const ALI = {
+    api:       'https://api.aliyundrive.com',
+    auth:      'https://auth.aliyundrive.com/v2/account/token',
+    shareTok:  '/v2/share_link/get_share_token',
+    shareInfo: '/adrive/v2/share_link/get_share_by_anonymous',
+    shareList: '/adrive/v3/file/list',
+    driveList: '/adrive/v3/file/list',
+    batch:     '/v2/batch',
+    byPath:    '/v2/file/get_by_path',
+    mkdir:     '/adrive/v2/file/createWithFolders',
+    fileGet:   '/v2/file/get',
+  };
+
+  const ALI_ITEM_MASK = 'next_marker,punished_file_count,total_count,items(category,created_at,drive_id,file_extension,file_id,name,parent_file_id,size,type,updated_at,content_hash,content_hash_name)';
+  const ALI_ITEM_MASK_BASIC = 'next_marker,punished_file_count,total_count,items(category,created_at,drive_id,file_extension,file_id,name,parent_file_id,size,type,updated_at)';
+
+  function sanitizeName(s) {
+    const out = String(s || '').replace(/[\\/:*?"<>|\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return out || '未命名';
+  }
+
+  const AliLink = {
+    pwdOf(line) {
+      const s = String(line || '');
+      const q = s.match(/[?&]pwd=([A-Za-z0-9]{4})/i);
+      if (q) return q[1];
+      const t = s.match(/(?:提取码|访问码|密码)\s*[:：]?\s*([A-Za-z0-9]{4})/);
+      return t ? t[1] : '';
+    },
+
+    // 一行一个链接；同一行里的「提取码: xxxx」或 ?pwd=xxxx 会跟这条链接绑定
+    extract(text) {
+      const out = [];
+      const seen = new Set();
+      const push = (id, pwd) => {
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        out.push({ shareId: id, pwd: pwd || '', url: 'https://www.alipan.com/s/' + id });
+      };
+      const raw = String(text || '');
+      for (const line of raw.split(/\r?\n/)) {
+        const m = line.match(/(?:aliyundrive|alipan)\.com\/s\/([A-Za-z0-9_-]+)/i);
+        if (m) push(m[1], this.pwdOf(line));
+      }
+      if (!out.length) {
+        const re = /(?:aliyundrive|alipan)\.com\/s\/([A-Za-z0-9_-]+)/ig;
+        let m;
+        while ((m = re.exec(raw))) push(m[1], this.pwdOf(raw));
+      }
+      return out;
+    },
+  };
+
+  // 阿里云盘请求队列：串行 + 260ms 间隔，避免短时间打爆接口。
+  const AliQueue = {
+    q: [],
+    busy: false,
+    lastAt: 0,
+    gap: 260,
+
+    enqueue(fn) {
+      return new Promise((resolve, reject) => {
+        this.q.push({ fn, resolve, reject });
+        this.pump();
+      });
+    },
+
+    async pump() {
+      if (this.busy) return;
+      this.busy = true;
+      try {
+        while (this.q.length) {
+          const wait = this.lastAt + this.gap - now();
+          if (wait > 0) await sleep(wait);
+          const item = this.q.shift();
+          if (!item) break;
+          this.lastAt = now();
+          try { item.resolve(await item.fn()); } catch (e) { item.reject(e); }
+        }
+      } finally {
+        this.busy = false;
+      }
+    },
+  };
+
+  function aliRequest(opts) {
+    return AliQueue.enqueue(() => rawRequest({
+      method: opts.method || 'POST',
+      url: opts.url,
+      data: opts.data,
+      headers: Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {}),
+      timeout: opts.timeout || 30000,
+    }));
+  }
+
+  const Aliyun = {
+    // 单点出口，测试里可替换成假实现
+    request(opts) {
+      return aliRequest(opts);
+    },
+
+    isAliHost() {
+      try { return /(^|\.)(aliyundrive|alipan)\.com$/i.test(location.hostname); } catch (_) { return false; }
+    },
+
+    // 阿里云盘把登录态放在 localStorage.token（JSON，含 refresh_token）
+    readPageToken() {
+      try {
+        const store = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+        const raw = store.localStorage && store.localStorage.getItem('token');
+        if (!raw) return null;
+        const j = JSON.parse(raw);
+        if (!j || !j.refresh_token) return null;
+        return {
+          refresh_token: String(j.refresh_token),
+          access_token: String(j.access_token || ''),
+          drive_id: String(j.default_drive_id || j.drive_id || ''),
+          user_id: String(j.user_id || ''),
+          user_name: String(j.user_name || j.nick_name || ''),
+          expire_at: 0,
+          at: now(),
+        };
+      } catch (_) {
+        return null;
+      }
+    },
+
+    capturePageToken() {
+      const t = this.readPageToken();
+      if (!t) return false;
+      const cur = Store.get('aliyunToken', null);
+      if (cur && cur.refresh_token === t.refresh_token && cur.access_token) return false;
+      Store.set('aliyunToken', t);
+      return true;
+    },
+
+    stored() {
+      const t = Store.get('aliyunToken', null);
+      return t && t.refresh_token ? t : null;
+    },
+
+    async token(force) {
+      const cur = this.stored();
+      if (!cur) {
+        throw new Error('尚未绑定阿里云盘：请先在浏览器登录 alipan.com，回到面板点「绑定阿里云盘」');
+      }
+      if (!force && cur.access_token && Number(cur.expire_at || 0) > now() + 60000) return cur;
+      const res = await this.request({
+        method: 'POST',
+        url: ALI.auth,
+        data: JSON.stringify({ refresh_token: cur.refresh_token, grant_type: 'refresh_token' }),
+      });
+      const j = res.json || {};
+      if (!j.access_token) {
+        const msg = j.message || j.code || ('HTTP ' + res.status);
+        throw new Error('阿里云盘登录态已失效（' + msg + '），请重新登录 alipan.com 后再绑定');
+      }
+      const next = {
+        refresh_token: String(j.refresh_token || cur.refresh_token),
+        access_token: String(j.access_token),
+        drive_id: String(j.default_drive_id || cur.drive_id || ''),
+        user_id: String(j.user_id || cur.user_id || ''),
+        user_name: String(j.user_name || cur.user_name || ''),
+        expire_at: now() + Math.max(300, Number(j.expires_in) || 7200) * 1000 - 60000,
+        at: now(),
+      };
+      Store.set('aliyunToken', next);
+      return next;
+    },
+
+    headers(token, shareToken) {
+      const hdrs = {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + token.access_token,
+      };
+      if (shareToken) hdrs['x-share-token'] = shareToken;
+      return hdrs;
+    },
+
+    errText(j, res, fallback) {
+      if (j && j.message) return String(j.message);
+      if (j && j.code) return String(j.code);
+      return fallback + '（HTTP ' + (res ? res.status : '?') + '）';
+    },
+
+    normItem(it) {
+      return {
+        id: String(it.file_id || ''),
+        name: String(it.name || ''),
+        size: Number(it.size) || 0,
+        isFolder: it.type === 'folder',
+        hash: String(it.content_hash || ''),
+      };
+    },
+
+    async getShareToken(share) {
+      const res = await this.request({
+        method: 'POST',
+        url: ALI.api + ALI.shareTok,
+        data: JSON.stringify({ share_id: share.shareId, share_pwd: share.pwd || '' }),
+      });
+      const j = res.json || {};
+      if (!j.share_token) {
+        const code = String(j.code || '');
+        if (code === 'InvalidResource.SharePwd') throw new Error('提取码错误，或该分享需要提取码');
+        if (/NotFound|Expired|Canceled|Deleted/i.test(code)) throw new Error('分享不存在或已失效');
+        throw new Error(this.errText(j, res, '获取分享凭证失败'));
+      }
+      return String(j.share_token);
+    },
+
+    async getShareName(shareId, shareToken) {
+      try {
+        const res = await this.request({
+          method: 'POST',
+          url: ALI.api + ALI.shareInfo + '?share_id=' + encodeURIComponent(shareId),
+          data: JSON.stringify({ share_id: shareId }),
+          headers: { 'Content-Type': 'application/json', 'x-share-token': shareToken },
+        });
+        const j = res.json || {};
+        return String(j.share_name || j.display_name || j.share_title || '');
+      } catch (_) {
+        return '';
+      }
+    },
+
+    // content_hash 不一定被 jsonmask 接受，失败时上层会用 withHash=false 重试一次
+    async listShare(shareId, shareToken, parentId, withHash) {
+      const items = [];
+      let marker = '';
+      for (let page = 0; page < 40; page += 1) {
+        const body = {
+          share_id: shareId,
+          parent_file_id: parentId || 'root',
+          limit: 100,
+          url_expire_sec: 14400,
+          fields: 'thumbnail',
+          order_by: 'name',
+          order_direction: 'ASC',
+        };
+        if (marker) body.marker = marker;
+        const mask = withHash === false ? ALI_ITEM_MASK_BASIC : ALI_ITEM_MASK;
+        const res = await this.request({
+          method: 'POST',
+          url: ALI.api + ALI.shareList + '?jsonmask=' + encodeURIComponent(mask),
+          data: JSON.stringify(body),
+          headers: { 'Content-Type': 'application/json', 'x-share-token': shareToken },
+        });
+        const j = res.json || {};
+        if (!Array.isArray(j.items)) throw new Error(this.errText(j, res, '读取分享目录失败'));
+        for (const it of j.items) items.push(this.normItem(it));
+        marker = String(j.next_marker || '');
+        if (!marker) break;
+      }
+      return items;
+    },
+
+    async getByPath(token, path) {
+      try {
+        const res = await this.request({
+          method: 'POST',
+          url: ALI.api + ALI.byPath,
+          data: JSON.stringify({ drive_id: token.drive_id, file_path: path }),
+          headers: this.headers(token),
+        });
+        const j = res.json || {};
+        return j.file_id ? String(j.file_id) : '';
+      } catch (_) {
+        return '';
+      }
+    },
+
+    async makeFolder(token, parentId, name) {
+      const res = await this.request({
+        method: 'POST',
+        url: ALI.api + ALI.mkdir,
+        data: JSON.stringify({
+          drive_id: token.drive_id,
+          parent_file_id: parentId,
+          name,
+          type: 'folder',
+          check_name_mode: 'refuse',
+        }),
+        headers: this.headers(token),
+      });
+      const j = res.json || {};
+      if (j.file_id) return String(j.file_id);
+      if (String(j.code || '') === 'QuotaExhausted.Drive') throw new Error('阿里云盘空间已满，无法新建文件夹');
+      return '';
+    },
+
+    // 逐级解析 /a/b/c，缺失的层级用 createWithFolders 建出来
+    async ensurePath(token, path) {
+      const parts = String(path || '').split('/').map((s) => s.trim()).filter(Boolean);
+      let parent = 'root';
+      let acc = '';
+      for (const part of parts) {
+        acc += '/' + part;
+        let id = await this.getByPath(token, acc);
+        if (!id) id = await this.makeFolder(token, parent, part);
+        if (!id) id = await this.getByPath(token, acc);
+        if (!id) throw new Error('创建阿里云盘文件夹失败：' + acc);
+        parent = id;
+      }
+      return parent;
+    },
+
+    copyError(code, r) {
+      const map = {
+        'QuotaExhausted.Drive': '云盘空间已满',
+        'ForbiddenName': '文件名不合法',
+        'AlreadyExists': '目标目录已有同名文件',
+        'ShareLinkExpired': '分享已失效',
+        'NotFound.File': '文件不存在',
+      };
+      if (map[code]) return map[code];
+      if (r && r.body && r.body.message) return String(r.body.message);
+      return code || '未知错误';
+    },
+
+    // 服务端复制：不经过本机，不耗流量
+    async copyFiles(token, shareId, shareToken, toParentId, fileIds) {
+      const out = { ok: [], failed: [], async: 0 };
+      for (let i = 0; i < fileIds.length; i += 50) {
+        const ids = fileIds.slice(i, i + 50);
+        const requests = ids.map((id) => ({
+          body: {
+            share_id: shareId,
+            file_id_list: [''],
+            file_id: id,
+            to_drive_id: token.drive_id,
+            to_parent_file_id: toParentId,
+            auto_rename: true,
+          },
+          headers: { 'Content-Type': 'application/json' },
+          id,
+          method: 'POST',
+          url: '/file/copy',
+        }));
+        const res = await this.request({
+          method: 'POST',
+          url: ALI.api + ALI.batch,
+          data: JSON.stringify({ requests, resource: 'file' }),
+          headers: this.headers(token, shareToken),
+        });
+        const j = res.json || {};
+        if (!Array.isArray(j.responses)) {
+          throw new Error(this.errText(j, res, '转存失败'));
+        }
+        for (const r of j.responses) {
+          const status = Number(r && r.status) || 0;
+          const body = (r && r.body) || {};
+          if (status >= 200 && status < 300) {
+            if (body.async_task_id) out.async += 1;
+            out.ok.push(String(r.id));
+          } else {
+            out.failed.push({
+              id: String(r.id),
+              code: String(body.code || ''),
+              message: this.copyError(String(body.code || ''), r),
+            });
+          }
+        }
+      }
+      return out;
+    },
+
+    async listFolder(token, parentId, withHash) {
+      const items = [];
+      let marker = '';
+      for (let page = 0; page < 40; page += 1) {
+        const body = {
+          drive_id: token.drive_id,
+          parent_file_id: parentId,
+          limit: 100,
+          order_by: 'name',
+          order_direction: 'ASC',
+        };
+        if (marker) body.marker = marker;
+        const mask = withHash === false ? ALI_ITEM_MASK_BASIC : ALI_ITEM_MASK;
+        const res = await this.request({
+          method: 'POST',
+          url: ALI.api + ALI.driveList + '?jsonmask=' + encodeURIComponent(mask),
+          data: JSON.stringify(body),
+          headers: this.headers(token),
+        });
+        const j = res.json || {};
+        if (!Array.isArray(j.items)) throw new Error(this.errText(j, res, '读取阿里云盘目录失败'));
+        for (const it of j.items) items.push(this.normItem(it));
+        marker = String(j.next_marker || '');
+        if (!marker) break;
+      }
+      return items;
+    },
+
+    // 递归收集目标目录下的文件，用于生成哈希清单
+    async collectManifest(token, rootId, maxFiles, withHash) {
+      const files = [];
+      let dirs = [rootId];
+      let hash = withHash !== false;
+      for (let depth = 0; depth < 6 && dirs.length && files.length < maxFiles; depth += 1) {
+        const next = [];
+        for (const dir of dirs) {
+          if (files.length >= maxFiles) break;
+          let items;
+          try {
+            items = await this.listFolder(token, dir, hash);
+          } catch (e) {
+            if (!hash) throw e;
+            hash = false;
+            items = await this.listFolder(token, dir, false);
+          }
+          for (const it of items) {
+            if (it.isFolder) next.push(it.id);
+            else if (files.length < maxFiles) files.push(it);
+          }
+        }
+        dirs = next;
+      }
+      return files;
+    },
+
+    async fileHash(token, fileId) {
+      const res = await this.request({
+        method: 'POST',
+        url: ALI.api + ALI.fileGet,
+        data: JSON.stringify({ drive_id: token.drive_id, file_id: fileId }),
+        headers: this.headers(token),
+      });
+      const j = res.json || {};
+      return String(j.content_hash || '');
+    },
+  };
+
   // ---------------------------------------------------------------- ui
 
   const CSS = `
@@ -1198,6 +1647,20 @@
     .modal-actions { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid #22304a; }
     .previewpre { white-space: pre-wrap; word-break: break-all; font-size: 11px; max-height: 50vh; overflow: auto; color: #cbd5e1; background: #0b1220; border: 1px solid #22304a; border-radius: 8px; padding: 10px; margin: 8px 0 0; }
     .btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
+    .alihead {
+      display: flex; align-items: center; justify-content: space-between;
+      margin: 14px 0 6px; color: #94a3b8; font-size: 12px;
+    }
+    .alihead .btn { padding: 3px 8px; font-size: 11px; }
+    .alilist { display: grid; gap: 4px; max-height: 210px; overflow: auto; }
+    .alirow {
+      display: flex; gap: 6px; align-items: center; font-size: 12px; color: #cbd5e1;
+      padding: 4px 7px; background: #111c33; border: 1px solid #1e293b; border-radius: 6px;
+    }
+    .alirow input[type=checkbox] { width: auto; margin: 0; }
+    .alirow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .alirow .sz { color: #94a3b8; font-size: 11px; white-space: nowrap; }
+    .alirow .hs { color: #64748b; font-size: 10px; font-family: ui-monospace, monospace; white-space: nowrap; }
   `;
 
   const UI = {
@@ -1210,6 +1673,8 @@
     _selToastAt: 0,
     _riskTimer: 0,
     picker: { cid: '0', crumbs: [{ name: '根目录', cid: '0' }], busy: false },
+    aliBusy: false,
+    aliState: { shares: [], items: [], manifest: [], targets: [] },
 
     init() {
       if (this.ready) return;
@@ -1252,15 +1717,21 @@
       );
 
       const sendSec = this.buildSend();
+      const aliSec = this.buildAli();
       const setSec = this.buildSettings();
       const tasksSec = this.buildTasks();
       this.els.sendSec = sendSec;
+      this.els.aliSec = aliSec;
       this.els.setSec = setSec;
       this.els.tasksSec = tasksSec;
 
       this.els.tabSend = h('button', {
         class: 'active', type: 'button', text: '发送',
         onclick: () => this.showTab('send'),
+      });
+      this.els.tabAli = h('button', {
+        type: 'button', text: '阿里',
+        onclick: () => this.showTab('ali'),
       });
       this.els.tabTasks = h('button', {
         type: 'button', text: '任务',
@@ -1282,8 +1753,8 @@
           })
         ),
         this.els.riskbar,
-        h('div', { class: 'tabs' }, this.els.tabSend, this.els.tabTasks, this.els.tabSettings),
-        h('div', { class: 'body' }, sendSec, tasksSec, setSec)
+        h('div', { class: 'tabs' }, this.els.tabSend, this.els.tabAli, this.els.tabTasks, this.els.tabSettings),
+        h('div', { class: 'body' }, sendSec, aliSec, tasksSec, setSec)
       );
 
       this.els.pickerOverlay = this.buildPicker();
@@ -1355,6 +1826,290 @@
         this.els.status,
         h('div', { class: 'hint', text: '首次使用请先选择默认目录。遇到人机验证会暂停，不会自动破解。' })
       );
+    },
+
+    buildAli() {
+      const ta = h('textarea', {
+        placeholder: 'https://www.alipan.com/s/xxxxxxxx\n提取码: abcd',
+        spellcheck: 'false',
+      });
+      const target = h('input', { type: 'text', placeholder: '/115搬运' });
+      const split = h('input', { type: 'checkbox' });
+      const parseBtn = h('button', { class: 'btn primary block', type: 'button', text: '解析分享', onclick: () => this.aliParse() });
+      const saveBtn = h('button', { class: 'btn primary block', type: 'button', text: '保存到阿里云盘', hidden: true, onclick: () => this.aliSave() });
+      const status = h('div', { class: 'status' });
+      const list = h('div', { class: 'alilist' });
+      const manifest = h('div', { class: 'alilist' });
+      const copyBtn = h('button', { class: 'btn', type: 'button', text: '复制哈希清单', hidden: true, onclick: () => this.aliCopyManifest() });
+      const bindBtn = h('button', { class: 'btn', type: 'button', text: '绑定阿里云盘', onclick: () => this.aliBind() });
+
+      target.value = String(Store.get('aliyunTargetPath', '/115搬运') || '/115搬运');
+      split.checked = Store.get('aliyunSplitFolder', true) !== false;
+
+      this.els.aliLinks = ta;
+      this.els.aliTarget = target;
+      this.els.aliSplit = split;
+      this.els.aliParseBtn = parseBtn;
+      this.els.aliSaveBtn = saveBtn;
+      this.els.aliStatus = status;
+      this.els.aliList = list;
+      this.els.aliManifest = manifest;
+      this.els.aliCopyBtn = copyBtn;
+
+      return h('section', { hidden: true },
+        this.field('阿里云盘分享链接', ta, '支持 www.alipan.com/s/… 与 www.aliyundrive.com/s/…，可带 ?pwd= 或「提取码: xxxx」，一行一个。'),
+        this.field('保存到阿里云盘', target, '文件夹路径，不存在会自动创建。'),
+        h('label', { class: 'checkrow' }, split, h('span', { text: '每个分享单独建子文件夹（推荐）' })),
+        parseBtn,
+        saveBtn,
+        status,
+        h('div', { class: 'alihead' },
+          h('span', { text: '分享内容' }),
+          bindBtn
+        ),
+        list,
+        h('div', { class: 'alihead' },
+          h('span', { text: '哈希清单（文件名 / 大小 / SHA1）' }),
+          copyBtn
+        ),
+        manifest,
+        h('div', { class: 'hint', text: '转存在阿里云盘服务端完成，不经过本机、不耗流量。清单里的 SHA1 用于下一步判断 115 是否可秒传。' })
+      );
+    },
+
+    aliSetStatus(text, type) {
+      const el = this.els.aliStatus;
+      if (!el) return;
+      el.textContent = text || '';
+      el.className = 'status' + (type ? ' ' + type : '');
+    },
+
+    async aliBind() {
+      if (!Aliyun.isAliHost()) {
+        const cur = Aliyun.stored();
+        if (!cur) {
+          this.aliSetStatus('请先在浏览器登录 https://www.alipan.com/ ，回到这个页面会记住登录态；也可以在阿里云盘页面点这里的「绑定阿里云盘」', 'error');
+          return;
+        }
+      }
+      try {
+        if (Aliyun.isAliHost()) Aliyun.capturePageToken();
+        const tok = await Aliyun.token(true);
+        this.aliSetStatus('已绑定：' + (tok.user_name || tok.user_id || '阿里云盘'), 'success');
+      } catch (e) {
+        this.aliSetStatus(e.message || '绑定失败', 'error');
+      }
+    },
+
+    async aliParse() {
+      if (this.aliBusy) return;
+      const shares = AliLink.extract(this.els.aliLinks.value);
+      if (!shares.length) {
+        this.aliSetStatus('没有识别到阿里云盘分享链接', 'error');
+        return;
+      }
+      this.aliBusy = true;
+      this.els.aliParseBtn.disabled = true;
+      this.els.aliSaveBtn.hidden = true;
+      this.els.aliCopyBtn.hidden = true;
+      this.els.aliList.textContent = '';
+      this.els.aliManifest.textContent = '';
+      const items = [];
+      const errors = [];
+      try {
+        const token = await Aliyun.token();
+        for (let i = 0; i < shares.length; i += 1) {
+          const share = shares[i];
+          this.aliSetStatus('正在解析 ' + (i + 1) + '/' + shares.length + '：' + share.shareId);
+          try {
+            const shareToken = await Aliyun.getShareToken(share);
+            const name = await Aliyun.getShareName(share.shareId, shareToken);
+            let list;
+            try {
+              list = await Aliyun.listShare(share.shareId, shareToken, 'root', true);
+            } catch (_) {
+              list = await Aliyun.listShare(share.shareId, shareToken, 'root', false);
+            }
+            for (const it of list) {
+              items.push(Object.assign(it, {
+                shareId: share.shareId,
+                shareToken,
+                shareName: name || share.shareId,
+                checked: true,
+              }));
+            }
+          } catch (e) {
+            errors.push(share.shareId + '：' + (e.message || '解析失败'));
+          }
+        }
+        this.aliState = { shares, items, manifest: [], targets: [] };
+        this.renderAliList();
+        if (items.length) this.els.aliSaveBtn.hidden = false;
+        const summary = '共 ' + items.length + ' 项';
+        this.aliSetStatus(
+          errors.length ? summary + '；' + errors.join('；') : summary + '，勾选后点「保存到阿里云盘」',
+          errors.length ? 'warn' : 'success'
+        );
+      } catch (e) {
+        this.aliSetStatus(e.message || '解析失败', 'error');
+      } finally {
+        this.aliBusy = false;
+        this.els.aliParseBtn.disabled = false;
+      }
+    },
+
+    renderAliState() {
+      this.renderAliList();
+      this.renderAliManifest();
+    },
+
+    renderAliList() {
+      const box = this.els.aliList;
+      if (!box) return;
+      box.textContent = '';
+      const items = (this.aliState && this.aliState.items) || [];
+      const shareIds = new Set(items.map((i) => i.shareId));
+      const multi = shareIds.size > 1;
+      for (const it of items) {
+        const cb = h('input', { type: 'checkbox' });
+        cb.checked = it.checked !== false;
+        cb.addEventListener('change', () => { it.checked = cb.checked; });
+        const label = multi ? it.shareName + ' / ' + it.name : it.name;
+        box.appendChild(h('div', { class: 'alirow' },
+          cb,
+          h('span', { class: 'nm', text: (it.isFolder ? '📁 ' : '') + label, title: label }),
+          h('span', { class: 'sz', text: it.isFolder ? '文件夹' : fmtBytes(it.size) })
+        ));
+      }
+    },
+
+    renderAliManifest() {
+      const box = this.els.aliManifest;
+      if (!box) return;
+      box.textContent = '';
+      const list = (this.aliState && this.aliState.manifest) || [];
+      for (const f of list) {
+        box.appendChild(h('div', { class: 'alirow' },
+          h('span', { class: 'nm', text: f.name, title: f.name }),
+          h('span', { class: 'sz', text: fmtBytes(f.size) }),
+          h('span', {
+            class: 'hs',
+            text: f.hash ? f.hash.slice(0, 10) + '…' : '无哈希',
+            title: f.hash || '阿里云盘未返回该文件的 content_hash',
+          })
+        ));
+      }
+    },
+
+    async aliSave() {
+      if (this.aliBusy) return;
+      const st = this.aliState || { items: [] };
+      const picked = (st.items || []).filter((i) => i.checked !== false);
+      if (!picked.length) {
+        this.aliSetStatus('没有勾选任何项目', 'error');
+        return;
+      }
+      const basePath = String(this.els.aliTarget.value || '').trim() || '/115搬运';
+      const split = !!this.els.aliSplit.checked;
+      Store.set('aliyunTargetPath', basePath);
+      Store.set('aliyunSplitFolder', split);
+
+      this.aliBusy = true;
+      this.els.aliSaveBtn.disabled = true;
+      try {
+        const token = await Aliyun.token();
+        const groups = new Map();
+        for (const it of picked) {
+          if (!groups.has(it.shareId)) groups.set(it.shareId, []);
+          groups.get(it.shareId).push(it);
+        }
+        const targets = [];
+        let ok = 0;
+        let n = 0;
+        const failures = [];
+        for (const [shareId, list] of groups) {
+          n += 1;
+          const first = list[0];
+          this.aliSetStatus('正在转存 ' + n + '/' + groups.size + '：' + first.shareName);
+          const folder = split ? sanitizeName(first.shareName || shareId) : '';
+          const path = folder ? basePath.replace(/\/+$/, '') + '/' + folder : basePath;
+          const parentId = await Aliyun.ensurePath(token, path);
+          const res = await Aliyun.copyFiles(token, shareId, first.shareToken, parentId, list.map((i) => i.id));
+          ok += res.ok.length;
+          for (const f of res.failed) failures.push(f.message);
+          targets.push({ shareId, parentId, path });
+        }
+        st.targets = targets;
+        this.aliSetStatus(
+          '转存完成：成功 ' + ok + ' 项' + (failures.length ? '，失败 ' + failures.length + ' 项（' + failures[0] + '）' : '') + '。正在读取哈希…',
+          failures.length ? 'warn' : 'success'
+        );
+        await this.aliBuildManifest(token);
+      } catch (e) {
+        this.aliSetStatus(e.message || '转存失败', 'error');
+      } finally {
+        this.aliBusy = false;
+        this.els.aliSaveBtn.disabled = false;
+      }
+    },
+
+    async aliBuildManifest(token) {
+      const st = this.aliState;
+      const files = [];
+      const seen = new Set();
+      for (const tgt of st.targets || []) {
+        let list;
+        try {
+          list = await Aliyun.collectManifest(token, tgt.parentId, 500, true);
+        } catch (e) {
+          continue;
+        }
+        for (const f of list) {
+          if (!f.id || seen.has(f.id)) continue;
+          seen.add(f.id);
+          files.push(f);
+        }
+      }
+      let lookups = 0;
+      for (const f of files) {
+        if (f.hash || lookups >= 100) continue;
+        lookups += 1;
+        this.aliSetStatus('正在补全哈希 ' + lookups + '/' + files.length + '…');
+        try { f.hash = await Aliyun.fileHash(token, f.id); } catch (_) {}
+      }
+      st.manifest = files;
+      this.renderAliManifest();
+      const hashed = files.filter((f) => f.hash).length;
+      this.els.aliCopyBtn.hidden = !files.length;
+      this.aliSetStatus(
+        files.length
+          ? '清单已生成：' + files.length + ' 个文件，' + hashed + ' 个带 SHA1'
+          : '转存已提交，但没有读到文件（可能还在服务端排队）',
+        files.length ? 'success' : 'warn'
+      );
+    },
+
+    async aliCopyManifest() {
+      const list = (this.aliState && this.aliState.manifest) || [];
+      if (!list.length) return;
+      const text = list.map((f) => [f.name, f.size, f.hash || ''].join('\t')).join('\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        this.toast('已复制 ' + list.length + ' 行（文件名 / 大小 / SHA1）', 'success');
+      } catch (_) {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.cssText = 'position:fixed;top:-1000px;';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+          this.toast('已复制 ' + list.length + ' 行', 'success');
+        } catch (e) {
+          this.toast('复制失败，请手动选中清单', 'error');
+        }
+      }
     },
 
     buildTasks() {
@@ -1609,6 +2364,7 @@
       }, true);
       try { GM_registerMenuCommand('115 资源助手：打开面板', () => this.openPanel()); } catch (_) {}
       try { GM_registerMenuCommand('115 资源助手：选择默认目录', () => { this.openPanel(); this.openPicker(); }); } catch (_) {}
+      try { GM_registerMenuCommand('115 资源助手：读取阿里云盘登录态', () => { const ok = Aliyun.capturePageToken(); this.toast(ok ? '已记录阿里云盘登录态' : '没有读到登录态（需在已登录的 alipan.com 页面执行）', ok ? 'success' : 'error'); }); } catch (_) {}
     },
 
     clampBall() {
@@ -1627,6 +2383,21 @@
 
     closePanel() {
       this.els.panel.hidden = true;
+    },
+
+    openAli(prefill) {
+      this.els.panel.hidden = false;
+      this.showTab('ali');
+      if (prefill) {
+        const add = String(prefill).trim();
+        const cur = this.els.aliLinks.value.trim();
+        if (add && !cur.includes(add)) {
+          this.els.aliLinks.value = cur ? cur + '\n' + add : add;
+        }
+      }
+      setTimeout(() => {
+        try { this.els.aliLinks.focus({ preventScroll: true }); } catch (_) {}
+      }, 30);
     },
 
     openPanel(prefill) {
@@ -1650,11 +2421,14 @@
 
     showTab(name) {
       this.els.tabSend.classList.toggle('active', name === 'send');
+      this.els.tabAli.classList.toggle('active', name === 'ali');
       this.els.tabTasks.classList.toggle('active', name === 'tasks');
       this.els.tabSettings.classList.toggle('active', name === 'settings');
       this.els.sendSec.hidden = name !== 'send';
+      this.els.aliSec.hidden = name !== 'ali';
       this.els.tasksSec.hidden = name !== 'tasks';
       this.els.setSec.hidden = name !== 'settings';
+      if (name === 'ali') this.renderAliState();
       if (name === 'settings') {
         this.renderSettings();
         }
@@ -1679,7 +2453,7 @@
         (Number(b.count) || 0) - (Number(a.count) || 0) ||
         (Number(b.lastUsedAt) || 0) - (Number(a.lastUsedAt) || 0)
       );
-      return list.slice(0, 3);
+      return list.slice(0, 5);
     },
 
     ensureDirUsage() {
@@ -1739,7 +2513,7 @@
       box.innerHTML = '';
       const dirs = this.topDirs();
       if (!dirs.length) {
-        box.appendChild(h('span', { class: 'favhint', text: '常用目录会根据你的选择自动生成（最多 3 个）' }));
+        box.appendChild(h('span', { class: 'favhint', text: '常用目录会根据你的选择自动生成（最多 5 个）' }));
         return;
       }
       const curCid = String(Store.get('defaultCid', '') || '');
@@ -2596,7 +3370,18 @@
         const text = sel.toString();
         if (!text || text.length > 8000) return;
         const links = Link.extract(text);
-        if (!links.length) return;
+        if (!links.length) {
+          const shares = AliLink.extract(text);
+          if (!shares.length) return;
+          if (this._selToastAt && now() - this._selToastAt < 3000) return;
+          this._selToastAt = now();
+          this.toast('检测到阿里云盘分享', 'info', {
+            action: '打开阿里转存',
+            timeout: 8000,
+            onAction: () => this.openAli(text),
+          });
+          return;
+        }
         if (this._selToastAt && now() - this._selToastAt < 3000) return;
         this._selToastAt = now();
         this.toast(
@@ -2616,8 +3401,20 @@
         if (!Store.get('copyToast', true)) return;
         const data = e.clipboardData && e.clipboardData.getData('text/plain');
         const sel = window.getSelection ? window.getSelection().toString() : '';
-        const links = Link.extract(data || sel || '');
-        if (!links.length) return;
+        const copied = data || sel || '';
+        const links = Link.extract(copied);
+        if (!links.length) {
+          const shares = AliLink.extract(copied);
+          if (!shares.length) return;
+          if (this._selToastAt && now() - this._selToastAt < 3000) return;
+          this._selToastAt = now();
+          this.toast('已复制阿里云盘分享', 'info', {
+            action: '打开阿里转存',
+            timeout: 8000,
+            onAction: () => this.openAli(copied),
+          });
+          return;
+        }
         this.toast(
           `已复制${links.length > 1 ? ' ' + links.length + ' 个链接' : '磁力链接'}`,
           'info',
@@ -3549,7 +4346,7 @@
 
   // ---------------------------------------------------------------- exports (debug)
 
-  window.__RH115__ = { NS, VERSION, API, Store, Risk, Scheduler, Link, Name, Pan115, Organizer, Queue, Update, taskState, UI, log, normalizeEntry, base32ToHex, cmpVer };
+  window.__RH115__ = { NS, VERSION, API, Store, Risk, Scheduler, Link, Name, Pan115, Organizer, Queue, Update, taskState, UI, log, normalizeEntry, base32ToHex, cmpVer, AliLink, Aliyun, sanitizeName };
 
   // ---------------------------------------------------------------- boot
 
@@ -3559,6 +4356,7 @@
       return;
     }
     try { Risk.init(); } catch (e) { log('risk init failed', e); }
+    try { if (Aliyun.isAliHost()) Aliyun.capturePageToken(); } catch (e) { log('aliyun token capture failed', e); }
     try {
       UI.init();
       UI.bindGlobal();

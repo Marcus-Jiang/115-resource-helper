@@ -49,6 +49,9 @@ Link.extract  ──►  UI.send
 | `Scheduler` | Serial request queue, minimum gap, jitter, pause/block |
 | `rawRequest` / `api` | `GM_xmlhttpRequest` wrapper, JSON parsing, risk detection |
 | `Pan115` | Sign, offline add, task list, APS/webapi listing, path→cid, mkdir, rename, delete, move |
+| `AliLink` | Aliyun share-link parsing (`share_id` + `?pwd=` / 「提取码: xxxx」), dedupe |
+| `AliQueue` / `aliRequest` | Serial Aliyun request queue (260 ms gap), isolated from the 115 `Scheduler` |
+| `Aliyun` | Aliyun token refresh, share token, share listing, server-side `/file/copy`, path→id, folder create, own-drive listing, per-file hash lookup |
 | `Link` | Magnet/ed2k extraction, dedupe, trim, base32→hex |
 | `Name` | Ad-token cleanup, bracket handling, subtitle/sample/extra name detection |
 | `Organizer` | Scan, classify, build plan, apply plan, safety guards |
@@ -65,6 +68,8 @@ Link.extract  ──►  UI.send
 | `risk` | Current risk state and last 911 time |
 | `pollLock` | Leader-tab lease for polling |
 | `resourceMode`, `minVideoMB`, `keepRatio`, `minAudioMB`, `keepImages`, `keepNfo`, `keepSubtitles`, `deleteSamples`, `keepExtras` | Organizer rules |
+| `aliyunToken` | Aliyun `refresh_token` / `access_token` / `drive_id` / `expire_at` |
+| `aliyunTargetPath`, `aliyunSplitFolder` | Aliyun save path and per-share subfolder toggle |
 | `autoOrganize`, `pollMinutes`, `mode`, `pushGapMs` | Behavior settings |
 | `favoritePaths`, `recentPaths` | Legacy; migrated into `dirUsage` |
 
@@ -77,6 +82,36 @@ Link.extract  ──►  UI.send
 - `911` blocks the scheduler and opens a modal; the user verifies on 115, then `Risk.probe()` checks the sign endpoint. A 10-minute cooldown follows.
 - `590075` pauses for 60 seconds.
 - A leader tab owns `pollLock`; other tabs sync tasks through `GM_addValueChangeListener`.
+
+## Aliyun share transfer (phase 1)
+
+```
+share link text
+      │
+      ▼
+AliLink.extract           share_id + pwd per line
+      │
+      ▼
+Aliyun.getShareToken      POST /v2/share_link/get_share_token
+Aliyun.listShare          POST /adrive/v3/file/list  (x-share-token)
+      │
+      ▼  user ticks items
+Aliyun.ensurePath         get_by_path → createWithFolders
+Aliyun.copyFiles          POST /v2/batch  → /file/copy   (server side, 0 traffic)
+      │
+      ▼
+Aliyun.collectManifest    recursive own-drive listing, content_hash = SHA1
+      │
+      ▼
+"name<TAB>size<TAB>sha1" manifest (used by 115 rapid-upload later)
+```
+
+Aliyun calls never touch the 115 `Scheduler`: a 115 `911` must not block the Aliyun side, and Aliyun
+has no risk state of its own. `AliQueue` serialises them with a 260 ms gap instead.
+
+The Aliyun token is captured from the logged-in page (`localStorage.token`) when the script runs on
+`*.aliyundrive.com` / `*.alipan.com`, or via the Tampermonkey menu command. It is refreshed through
+`auth.aliyundrive.com/v2/account/token` 60 s before expiry and the rotated `refresh_token` is written back.
 
 ## Organizer plan
 

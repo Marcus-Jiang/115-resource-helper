@@ -34,7 +34,7 @@ vm.runInContext(script, sandbox, { filename: '115-resource-helper.user.js' });
 
 const api = sandbox.window.__RH115__;
 if (!api) throw new Error('脚本没有导出 __RH115__');
-const { Link, Name, Organizer, normalizeEntry, base32ToHex, cmpVer, taskState } = api;
+const { Link, Name, Organizer, normalizeEntry, base32ToHex, cmpVer, taskState, AliLink, sanitizeName } = api;
 
 let passed = 0;
 function test(name, fn) {
@@ -490,6 +490,135 @@ test('版本比较', () => {
       assert.ok(res.errors[0].includes('归档到文件夹失败'));
     } finally {
       Object.assign(api.Pan115, orig);
+    }
+  });
+
+  test('阿里分享：识别 alipan 链接与 ?pwd', () => {
+    const r = AliLink.extract('https://www.alipan.com/s/AbCd1234?pwd=xy12');
+    assert.strictEqual(r.length, 1);
+    assert.strictEqual(r[0].shareId, 'AbCd1234');
+    assert.strictEqual(r[0].pwd, 'xy12');
+  });
+
+  test('阿里分享：识别 aliyundrive 链接与中文提取码', () => {
+    const r = AliLink.extract('https://www.aliyundrive.com/s/abcDEF12 提取码: 9k3m');
+    assert.strictEqual(r.length, 1);
+    assert.strictEqual(r[0].shareId, 'abcDEF12');
+    assert.strictEqual(r[0].pwd, '9k3m');
+  });
+
+  test('阿里分享：从整段分享文案里取链接', () => {
+    const text = '我用阿里云盘分享了「Demo」\n链接: https://www.alipan.com/s/Zz9 提取码：abcd\n点击链接保存';
+    const r = AliLink.extract(text);
+    assert.strictEqual(r.length, 1);
+    assert.strictEqual(r[0].shareId, 'Zz9');
+    assert.strictEqual(r[0].pwd, 'abcd');
+  });
+
+  test('阿里分享：多行、去重、各自绑定提取码', () => {
+    const r = AliLink.extract(
+      'https://www.alipan.com/s/aaa?pwd=1111\n' +
+      'https://www.alipan.com/s/bbb 提取码: 2222\n' +
+      'https://www.alipan.com/s/aaa 提取码: 3333'
+    );
+    assert.strictEqual(r.length, 2);
+    assert.deepStrictEqual([...r].map((x) => x.shareId), ['aaa', 'bbb']);
+    assert.deepStrictEqual([...r].map((x) => x.pwd), ['1111', '2222']);
+  });
+
+  test('阿里分享：无关文本返回空数组', () => {
+    assert.deepStrictEqual([...AliLink.extract('magnet:?xt=urn:btih:abc')], []);
+    assert.deepStrictEqual([...AliLink.extract('')], []);
+    assert.deepStrictEqual([...AliLink.extract(null)], []);
+  });
+
+  test('文件夹名清洗：去掉非法字符并兜底', () => {
+    assert.strictEqual(sanitizeName('a/b:c*?"<>|d'), 'a b c d');
+    assert.strictEqual(sanitizeName('   '), '未命名');
+    assert.strictEqual(sanitizeName(''), '未命名');
+  });
+
+  await atest('阿里转存：分享凭证请求格式', async () => {
+    const calls = [];
+    const orig = api.Aliyun.request;
+    api.Aliyun.request = async (opts) => {
+      calls.push(opts);
+      return { json: { share_token: 'ST' }, status: 200 };
+    };
+    try {
+      const st = await api.Aliyun.getShareToken({ shareId: 'SID', pwd: 'abcd' });
+      assert.strictEqual(st, 'ST');
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(calls[0].url, 'https://api.aliyundrive.com/v2/share_link/get_share_token');
+      assert.deepStrictEqual(JSON.parse(calls[0].data), { share_id: 'SID', share_pwd: 'abcd' });
+    } finally {
+      api.Aliyun.request = orig;
+    }
+  });
+
+  await atest('阿里转存：batch /file/copy 请求格式与失败映射', async () => {
+    const calls = [];
+    const orig = api.Aliyun.request;
+    const token = { access_token: 'AT', drive_id: 'D1' };
+    try {
+      api.Aliyun.request = async (opts) => {
+        calls.push(opts);
+        return { json: { responses: [{ id: 'f1', status: 200, body: {} }] }, status: 200 };
+      };
+      const res = await api.Aliyun.copyFiles(token, 'SID', 'ST', 'PID', ['f1']);
+      assert.strictEqual(res.ok.length, 1);
+      assert.strictEqual(calls[0].url, 'https://api.aliyundrive.com/v2/batch');
+      assert.strictEqual(calls[0].headers.Authorization, 'Bearer AT');
+      assert.strictEqual(calls[0].headers['x-share-token'], 'ST');
+      const body = JSON.parse(calls[0].data);
+      assert.strictEqual(body.resource, 'file');
+      assert.strictEqual(body.requests[0].url, '/file/copy');
+      assert.strictEqual(body.requests[0].method, 'POST');
+      assert.deepStrictEqual(body.requests[0].body, {
+        share_id: 'SID',
+        file_id_list: [''],
+        file_id: 'f1',
+        to_drive_id: 'D1',
+        to_parent_file_id: 'PID',
+        auto_rename: true,
+      });
+
+      api.Aliyun.request = async () => ({
+        json: { responses: [{ id: 'f2', status: 400, body: { code: 'QuotaExhausted.Drive' } }] },
+        status: 200,
+      });
+      const bad = await api.Aliyun.copyFiles(token, 'SID', 'ST', 'PID', ['f2']);
+      assert.strictEqual(bad.ok.length, 0);
+      assert.strictEqual(bad.failed.length, 1);
+      assert.strictEqual(bad.failed[0].message, '云盘空间已满');
+    } finally {
+      api.Aliyun.request = orig;
+    }
+  });
+
+  await atest('阿里转存：ensurePath 逐级创建缺失目录', async () => {
+    const calls = [];
+    const orig = api.Aliyun.request;
+    api.Aliyun.request = async (opts) => {
+      calls.push(opts);
+      if (opts.url.indexOf('/v2/file/get_by_path') >= 0) {
+        return { json: { code: 'NotFound.File' }, status: 404 };
+      }
+      if (opts.url.indexOf('/createWithFolders') >= 0) {
+        const body = JSON.parse(opts.data);
+        return { json: { file_id: 'NEW-' + body.name }, status: 201 };
+      }
+      return { json: {}, status: 200 };
+    };
+    try {
+      const id = await api.Aliyun.ensurePath({ access_token: 'AT', drive_id: 'D1' }, '/115搬运/分享');
+      assert.strictEqual(id, 'NEW-分享');
+      const mk = calls.filter((c) => c.url.indexOf('/createWithFolders') >= 0);
+      assert.strictEqual(mk.length, 2);
+      assert.strictEqual(JSON.parse(mk[0].data).parent_file_id, 'root');
+      assert.strictEqual(JSON.parse(mk[1].data).parent_file_id, 'NEW-115搬运');
+    } finally {
+      api.Aliyun.request = orig;
     }
   });
 

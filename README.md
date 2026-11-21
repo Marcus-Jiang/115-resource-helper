@@ -2,7 +2,7 @@
 
 > 选中或复制磁力链接，一键推送到 115 云下载；低频轮询任务，下载完成后整理文件夹名、文件名和垃圾文件。
 
-![version](https://img.shields.io/badge/version-0.5.0-blue)
+![version](https://img.shields.io/badge/version-0.6.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-5.x-orange)
 [![安装脚本](https://img.shields.io/badge/%E5%AE%89%E8%A3%85%E8%84%9A%E6%9C%AC-Tampermonkey-2f6fed)](https://ghproxy.net/https://raw.githubusercontent.com/Marcus-Jiang/115-resource-helper/main/115-resource-helper.user.js)
@@ -19,8 +19,10 @@
 - **平铺归档**：ED2K 这类下载后没有文件夹、文件直接落在目标目录的资源，整理时自动新建同名文件夹并移入。
 - **多种资源模式**：影视、剧集、音乐、软件/电子书、通用，避免用视频规则误删其他资源。
 - **可预览**：默认先弹预览，逐项勾选删除/改名；自动整理需要手动开启。
-- **常用目录**：自动记录最常使用/最近使用的 3 个目录，一键切换。
+- **常用目录**：自动记录最常使用/最近使用的 5 个目录，一键切换。
 - **任务筛选**：默认只看未完成任务，已完成/已忽略单独放一起。
+- **阿里云盘分享转存**：粘贴 `www.alipan.com/s/…` 或 `www.aliyundrive.com/s/…`（可带提取码），解析后勾选条目，在阿里云盘服务端一键复制到自己网盘——不经过本机、不耗上行带宽。选中或复制分享链接时，页面会直接弹出「打开阿里转存」提示。
+- **哈希清单**：转存完成后自动生成「文件名 / 大小 / SHA1」清单，一键复制，供后续判断 115 是否可秒传。
 
 ## 安装
 
@@ -63,7 +65,7 @@
 ### 1. 推送
 
 1. 点悬浮球 → **设置** → **默认目录** → 选择 115 里的目录（例如 `/电影`）。
-   - 「保存到」下面会自动显示**最常使用/最近使用的 3 个目录**（按使用次数排序，次数相同按最近使用排序）。
+   - 「保存到」下面会自动显示**最常使用/最近使用的 5 个目录**（按使用次数排序，次数相同按最近使用排序）。
    - 点目录按钮直接切换；点右侧 `×` 可从常用中移除（再次使用会重新出现）。
 2. 在任意网页：
    - **选中**包含磁力/电驴链接的文字 → 右上角出现「发送到 115」提示；
@@ -107,6 +109,18 @@
 ### 4. 整理任意目录
 
 任务页 → **整理任意目录**，或在目录选择器里进入某个目录后点 **整理此目录**。适合清理以前已经下载好的文件夹。
+
+### 5. 阿里云盘分享转存
+
+面板 → **阿里** 标签页：
+
+1. 第一次使用先点 **绑定阿里云盘**（或直接在已登录的 alipan.com 页面打开一次面板，会自动记住登录态）。
+2. 粘贴分享链接，可一行一个；提取码写在同行的 `?pwd=xxxx` 或「提取码: xxxx」里。
+3. 点 **解析分享**，勾选要保存的条目。
+4. 点 **保存到阿里云盘**，默认会在目标路径下按分享名建一个子文件夹。
+5. 转存完成后下方会列出每个文件的 SHA1，点 **复制哈希清单** 拿走。
+
+> 转存是阿里云盘服务端内部复制，零流量；清单里的 SHA1 是下一步判断 115 秒传的输入（二期实现）。
 
 ## 界面
 
@@ -231,12 +245,13 @@ CONTRIBUTING.md               开发与 PR 指南
 SECURITY.md                   数据与安全说明
 LICENSE                       MIT
 docs/115-api.md               已确认的 115 接口笔记
+docs/aliyun-api.md            阿里云盘分享转存 / 哈希清单接口笔记
 docs/ARCHITECTURE.md          模块与数据流
 docs/ROADMAP.md               后续计划
 docs/PUBLISHING.md            GitHub 发布清单
 docs/demo.html                截图用演示页（模拟数据）
 docs/images/                  README 截图
-test/core.test.js             纯函数测试（35 项）
+test/core.test.js             纯函数测试（51 项）
 test/ui.html                  UI 冒烟测试页
 scripts/set-repo.mjs          替换 GitHub 占位符
 .github/workflows/ci.yml      CI：语法检查 + 单元测试

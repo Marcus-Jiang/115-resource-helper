@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here. The format is inspired by [Keep a Changelog](https://keepachangelog.com/), and the project follows a `0.x` version scheme while the 115 endpoints are still being verified.
 
+## [0.6.0] - 2026-11-17
+
+### Added
+
+- 阿里云盘分享转存（面板新增「阿里」标签页）：粘贴 `www.alipan.com/s/…` 或 `www.aliyundrive.com/s/…`，可带 `?pwd=` 或「提取码: xxxx」，一行一个；解析后勾选条目，一键转存到自己的阿里云盘。转存在阿里云盘服务端完成，不经过本机、不消耗上行带宽。
+- 转存完成后自动递归读取目标目录，生成「文件名 / 大小 / SHA1」清单，可一键复制。`content_hash` 就是 115 秒传使用的同一套 SHA1。
+- 选中或复制阿里云盘分享链接时弹出「打开阿里转存」，直接跳到「阿里」标签页并填好链接。
+- 阿里云盘登录态复用：在已登录的 alipan.com / aliyundrive.com 页面自动读取 `localStorage.token`；也可用油猴菜单「读取阿里云盘登录态」或面板里的「绑定阿里云盘」手动触发；`refresh_token` 到期前自动续期并写回轮换后的新值。
+- 新增 `AliQueue` 串行队列（260ms 间隔），与 115 的 `Scheduler` 完全隔离：115 风控不会阻塞阿里云盘请求。
+- `docs/aliyun-api.md`：阿里云盘分享转存与哈希清单的接口笔记。
+
+### Changed
+
+- `@grant` 增加 `unsafeWindow`；`@connect` 增加 `api/auth(.|www.)aliyundrive.com`、`api/auth(.|www.)alipan.com`。
+- 单元测试从 42 项增加到 51 项（阿里分享链接解析、文件夹名清洗）。
+- 发送页「保存到」下方的常用目录从 3 个增加到 5 个。
+
+### Notes
+
+- 本期只做到「分享 → 自己的阿里云盘 → 哈希清单」。真正把文件搬进 115 需要 115 秒传（ECDH + `sig`/`token` + `sign_check`），留到下一期。
+- 阿里云盘免费账号的分享转存有次数上限，批量搬运前请留意。
+
 ## [0.5.0] - 2026-11-14
 
 ### Removed
